@@ -39,10 +39,11 @@ func gitSubcommandTier(subcmd string) cap.Tier {
 	switch subcmd {
 	case "status", "log", "diff", "show", "branch", "tag", "remote",
 		"rev-parse", "blame", "ls-files", "ls-tree", "shortlog",
-		"describe", "config", "reflog", "stash": // stash list is read, but stash push/pop is write
+		"describe", "reflog":
 		return cap.TierRead
 	case "add", "commit", "checkout", "switch", "merge", "rebase",
-		"cherry-pick", "fetch", "pull", "mv", "rm":
+		"cherry-pick", "fetch", "pull", "mv", "rm",
+		"stash", "config":
 		return cap.TierWrite
 	case "push", "reset", "clean", "gc", "filter-branch":
 		return cap.TierDangerous

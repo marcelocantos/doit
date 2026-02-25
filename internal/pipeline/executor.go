@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -67,7 +68,10 @@ func Execute(ctx context.Context, p *Pipeline, reg *cap.Registry, stdin io.Reade
 	n := len(p.Segments)
 	if n == 1 {
 		// Single segment: no pipes needed.
-		c, _ := reg.Lookup(p.Segments[0].CapName)
+		c, err := reg.Lookup(p.Segments[0].CapName)
+		if err != nil {
+			return fmt.Errorf("segment 0: %w", err)
+		}
 		return c.Run(ctx, p.Segments[0].Args, stdin, stdout, stderr)
 	}
 
@@ -105,7 +109,11 @@ func Execute(ctx context.Context, p *Pipeline, reg *cap.Registry, stdin io.Reade
 		go func(i int, seg Segment) {
 			defer wg.Done()
 
-			c, _ := reg.Lookup(seg.CapName)
+			c, err := reg.Lookup(seg.CapName)
+			if err != nil {
+				setErr(fmt.Errorf("segment %d: %w", i, err))
+				return
+			}
 
 			var segIn io.Reader
 			var segOut io.Writer
@@ -122,7 +130,7 @@ func Execute(ctx context.Context, p *Pipeline, reg *cap.Registry, stdin io.Reade
 				segOut = pipes[i].w
 			}
 
-			err := c.Run(ctx, seg.Args, segIn, segOut, stderr)
+			err = c.Run(ctx, seg.Args, segIn, segOut, stderr)
 			setErr(err)
 
 			// Close pipe writer so downstream sees EOF.
