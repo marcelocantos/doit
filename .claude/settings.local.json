@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(echo hello world hello:*)",
+      "Bash(bin/doit rm:*)",
+      "Bash(make build:*)",
+      "Bash(bin/doit:*)"
+    ]
+  }
+}

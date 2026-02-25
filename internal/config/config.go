@@ -1,0 +1,98 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/marcelocantos/doit/internal/cap"
+)
+
+// Config holds the global doit configuration.
+type Config struct {
+	Tiers TierConfig `yaml:"tiers"`
+	Audit AuditConfig `yaml:"audit"`
+}
+
+// TierConfig controls which safety tiers are enabled.
+type TierConfig struct {
+	Read      bool `yaml:"read"`
+	Build     bool `yaml:"build"`
+	Write     bool `yaml:"write"`
+	Dangerous bool `yaml:"dangerous"`
+}
+
+// AuditConfig controls audit log settings.
+type AuditConfig struct {
+	Path      string `yaml:"path"`
+	MaxSizeMB int    `yaml:"max_size_mb"`
+}
+
+// DefaultConfig returns the default configuration.
+func DefaultConfig() *Config {
+	home, _ := os.UserHomeDir()
+	return &Config{
+		Tiers: TierConfig{
+			Read:      true,
+			Build:     true,
+			Write:     true,
+			Dangerous: false,
+		},
+		Audit: AuditConfig{
+			Path:      filepath.Join(home, ".local", "share", "doit", "audit.jsonl"),
+			MaxSizeMB: 100,
+		},
+	}
+}
+
+// Load reads the config from the standard location (~/.config/doit/config.yaml).
+// If the file doesn't exist, returns the default config.
+func Load() (*Config, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return DefaultConfig(), nil
+	}
+
+	path := filepath.Join(home, ".config", "doit", "config.yaml")
+	return LoadFrom(path)
+}
+
+// LoadFrom reads the config from the given path.
+func LoadFrom(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return DefaultConfig(), nil
+		}
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+
+	cfg := DefaultConfig()
+	if err := yaml.Unmarshal(data, cfg); err != nil {
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+
+	// Expand ~ in audit path.
+	if cfg.Audit.Path != "" && cfg.Audit.Path[0] == '~' {
+		home, _ := os.UserHomeDir()
+		cfg.Audit.Path = filepath.Join(home, cfg.Audit.Path[1:])
+	}
+
+	return cfg, nil
+}
+
+// ApplyTiers sets the registry tier permissions from the config.
+func (c *Config) ApplyTiers(reg *cap.Registry) {
+	reg.SetTier(cap.TierRead, c.Tiers.Read)
+	reg.SetTier(cap.TierBuild, c.Tiers.Build)
+	reg.SetTier(cap.TierWrite, c.Tiers.Write)
+	reg.SetTier(cap.TierDangerous, c.Tiers.Dangerous)
+}
+
+// ConfigPath returns the standard config file path.
+func ConfigPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "doit", "config.yaml")
+}
