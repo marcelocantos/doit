@@ -55,5 +55,10 @@ func printGeneralHelp(w io.Writer) {
 	fmt.Fprintf(w, "  %s  redirect stdout to file\n", pipeline.OpRedirectOut)
 	fmt.Fprintf(w, "  %s  redirect stdin from file\n", pipeline.OpRedirectIn)
 	fmt.Fprintln(w)
+	fmt.Fprintln(w, "compound operators:")
+	fmt.Fprintf(w, "  %s  and-then (run next if previous succeeded)\n", pipeline.OpAndThen)
+	fmt.Fprintf(w, "  %s   or-else (run next if previous failed)\n", pipeline.OpOrElse)
+	fmt.Fprintf(w, "  %s   sequential (run next regardless)\n", pipeline.OpSequential)
+	fmt.Fprintln(w)
 	fmt.Fprintln(w, "safety tiers: read, build, write, dangerous")
 }

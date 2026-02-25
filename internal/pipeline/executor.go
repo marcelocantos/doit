@@ -9,6 +9,35 @@ import (
 	"github.com/marcelocantos/doit/internal/cap"
 )
 
+// ExecuteCommand runs a compound command, evaluating each pipeline step
+// sequentially and applying the compound operator logic.
+// Returns the error from the last-executed pipeline (or nil).
+func ExecuteCommand(ctx context.Context, cmd *Command, reg *cap.Registry, stdin io.Reader, stdout, stderr io.Writer) error {
+	var lastErr error
+
+	for i, step := range cmd.Steps {
+		if i > 0 {
+			prevOp := cmd.Steps[i-1].Op
+			switch Operator(prevOp) {
+			case Operator(OpAndThen):
+				if lastErr != nil {
+					continue
+				}
+			case Operator(OpOrElse):
+				if lastErr == nil {
+					continue
+				}
+			case Operator(OpSequential):
+				// Always run.
+			}
+		}
+
+		lastErr = Execute(ctx, step.Pipeline, reg, stdin, stdout, stderr)
+	}
+
+	return lastErr
+}
+
 // Execute runs a validated pipeline, streaming data between segments.
 // Each segment runs in its own goroutine, connected by io.Pipe().
 func Execute(ctx context.Context, p *Pipeline, reg *cap.Registry, stdin io.Reader, stdout, stderr io.Writer) error {

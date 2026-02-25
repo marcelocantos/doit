@@ -37,6 +37,24 @@ stdin from a file. These can appear anywhere in the argument list.
     doit --pipe grep -r TODO src/ ¦ sort › /tmp/results.txt
     doit --pipe sort ‹ /tmp/input.txt ¦ uniq -c
 
+## Compound commands
+
+Use compound operators to chain pipelines conditionally:
+
+- `＆＆` (and-then): run the next pipeline only if the previous succeeded
+- `‖` (or-else): run the next pipeline only if the previous failed
+- `；` (sequential): run the next pipeline regardless of exit code
+
+    doit --pipe make build ＆＆ git add -A
+    doit --pipe make build ‖ cat build-failed.txt
+    doit --pipe git add -A ；git commit -m "auto"
+
+Compound operators chain whole pipelines. Pipes and redirects scope to each
+pipeline section:
+
+    doit --pipe grep TODO src/ ¦ wc -l ＆＆ cat ok.txt
+    doit --pipe sort ‹ input.txt › sorted.txt ＆＆ head -5 ‹ sorted.txt
+
 ## Safety tiers
 
 Each capability has a safety tier: read, build, write, or dangerous.

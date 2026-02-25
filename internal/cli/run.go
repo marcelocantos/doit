@@ -52,38 +52,40 @@ func RunDirect(ctx context.Context, reg *cap.Registry, logger *audit.Logger, arg
 	return exitCode
 }
 
-// RunPipe executes a pipeline: doit pipe <args...>
+// RunPipe executes a compound command: doit --pipe <args...>
 func RunPipe(ctx context.Context, reg *cap.Registry, logger *audit.Logger, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "doit pipe: empty pipeline")
 		return 1
 	}
 
-	p, err := parsePipeline(args, reg)
+	cmd, err := parseCommand(args, reg)
 	if err != nil {
 		fmt.Fprintf(stderr, "doit pipe: %v\n", err)
 		return 1
 	}
 
-	if err := validatePipeline(p, reg); err != nil {
+	if err := validateCommand(cmd, reg); err != nil {
 		fmt.Fprintf(stderr, "doit pipe: %v\n", err)
 		return 1
 	}
 
 	ctx = cap.NewContext(ctx, reg)
 	start := time.Now()
-	err = executePipeline(ctx, p, reg, stdin, stdout, stderr)
+	err = executeCommand(ctx, cmd, reg, stdin, stdout, stderr)
 	duration := time.Since(start)
 
 	exitCode, errMsg := resolveError(err)
 
-	// Build audit info.
+	// Build audit info from all pipelines in the command.
 	pipelineStr := strings.Join(args, " ")
 	var segments, tiers []string
-	for _, seg := range p.Segments {
-		segments = append(segments, seg.CapName)
-		if c, err := reg.Lookup(seg.CapName); err == nil {
-			tiers = append(tiers, c.Tier().String())
+	for _, step := range cmd.Steps {
+		for _, seg := range step.Pipeline.Segments {
+			segments = append(segments, seg.CapName)
+			if c, err := reg.Lookup(seg.CapName); err == nil {
+				tiers = append(tiers, c.Tier().String())
+			}
 		}
 	}
 

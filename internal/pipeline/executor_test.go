@@ -129,6 +129,180 @@ func TestExecuteWithStdin(t *testing.T) {
 	}
 }
 
+// failCap always returns an error.
+type failCap struct {
+	name string
+}
+
+func (f *failCap) Name() string        { return f.name }
+func (f *failCap) Description() string { return "always fails" }
+func (f *failCap) Tier() cap.Tier      { return cap.TierRead }
+func (f *failCap) Validate(args []string) error { return nil }
+func (f *failCap) Run(_ context.Context, _ []string, _ io.Reader, _, _ io.Writer) error {
+	return fmt.Errorf("fail")
+}
+
+func TestExecuteCommandSingle(t *testing.T) {
+	reg := cap.NewRegistry()
+	reg.Register(&echoCap{name: "echo"})
+
+	cmd := &Command{
+		Steps: []CommandStep{
+			{Pipeline: &Pipeline{Segments: []Segment{{CapName: "echo", Args: []string{"hello"}}}}},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := ExecuteCommand(context.Background(), cmd, reg, strings.NewReader(""), &buf, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != "hello" {
+		t.Errorf("expected 'hello', got %q", got)
+	}
+}
+
+func TestExecuteCommandAndThenSuccess(t *testing.T) {
+	reg := cap.NewRegistry()
+	reg.Register(&echoCap{name: "echo"})
+	reg.Register(&echoCap{name: "echo2"})
+
+	cmd := &Command{
+		Steps: []CommandStep{
+			{Pipeline: &Pipeline{Segments: []Segment{{CapName: "echo", Args: []string{"hello"}}}}, Op: Operator(OpAndThen)},
+			{Pipeline: &Pipeline{Segments: []Segment{{CapName: "echo2", Args: []string{"world"}}}}},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := ExecuteCommand(context.Background(), cmd, reg, strings.NewReader(""), &buf, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "hello") || !strings.Contains(output, "world") {
+		t.Errorf("expected both 'hello' and 'world', got %q", output)
+	}
+}
+
+func TestExecuteCommandAndThenFailure(t *testing.T) {
+	reg := cap.NewRegistry()
+	reg.Register(&failCap{name: "fail"})
+	reg.Register(&echoCap{name: "echo"})
+
+	cmd := &Command{
+		Steps: []CommandStep{
+			{Pipeline: &Pipeline{Segments: []Segment{{CapName: "fail"}}}, Op: Operator(OpAndThen)},
+			{Pipeline: &Pipeline{Segments: []Segment{{CapName: "echo", Args: []string{"skipped"}}}}},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := ExecuteCommand(context.Background(), cmd, reg, strings.NewReader(""), &buf, io.Discard)
+	if err == nil {
+		t.Fatal("expected error from failed pipeline")
+	}
+	if strings.Contains(buf.String(), "skipped") {
+		t.Error("echo should not have run after failure with and-then")
+	}
+}
+
+func TestExecuteCommandOrElseSuccess(t *testing.T) {
+	reg := cap.NewRegistry()
+	reg.Register(&echoCap{name: "echo"})
+	reg.Register(&echoCap{name: "fallback"})
+
+	cmd := &Command{
+		Steps: []CommandStep{
+			{Pipeline: &Pipeline{Segments: []Segment{{CapName: "echo", Args: []string{"ok"}}}}, Op: Operator(OpOrElse)},
+			{Pipeline: &Pipeline{Segments: []Segment{{CapName: "fallback", Args: []string{"nope"}}}}},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := ExecuteCommand(context.Background(), cmd, reg, strings.NewReader(""), &buf, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "nope") {
+		t.Error("fallback should not have run after success with or-else")
+	}
+}
+
+func TestExecuteCommandOrElseFailure(t *testing.T) {
+	reg := cap.NewRegistry()
+	reg.Register(&failCap{name: "fail"})
+	reg.Register(&echoCap{name: "fallback"})
+
+	cmd := &Command{
+		Steps: []CommandStep{
+			{Pipeline: &Pipeline{Segments: []Segment{{CapName: "fail"}}}, Op: Operator(OpOrElse)},
+			{Pipeline: &Pipeline{Segments: []Segment{{CapName: "fallback", Args: []string{"recovered"}}}}},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := ExecuteCommand(context.Background(), cmd, reg, strings.NewReader(""), &buf, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "recovered") {
+		t.Error("fallback should have run after failure with or-else")
+	}
+}
+
+func TestExecuteCommandSequential(t *testing.T) {
+	reg := cap.NewRegistry()
+	reg.Register(&failCap{name: "fail"})
+	reg.Register(&echoCap{name: "echo"})
+
+	cmd := &Command{
+		Steps: []CommandStep{
+			{Pipeline: &Pipeline{Segments: []Segment{{CapName: "fail"}}}, Op: Operator(OpSequential)},
+			{Pipeline: &Pipeline{Segments: []Segment{{CapName: "echo", Args: []string{"always"}}}}},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := ExecuteCommand(context.Background(), cmd, reg, strings.NewReader(""), &buf, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "always") {
+		t.Error("echo should have run after failure with sequential")
+	}
+}
+
+func TestExecuteCommandChain(t *testing.T) {
+	// fail ＆＆ skip ‖ recover
+	// fail runs and fails. skip is skipped (＆＆ + error). recover runs (‖ + error).
+	reg := cap.NewRegistry()
+	reg.Register(&failCap{name: "fail"})
+	reg.Register(&echoCap{name: "skip"})
+	reg.Register(&echoCap{name: "recover"})
+
+	cmd := &Command{
+		Steps: []CommandStep{
+			{Pipeline: &Pipeline{Segments: []Segment{{CapName: "fail"}}}, Op: Operator(OpAndThen)},
+			{Pipeline: &Pipeline{Segments: []Segment{{CapName: "skip", Args: []string{"no"}}}}, Op: Operator(OpOrElse)},
+			{Pipeline: &Pipeline{Segments: []Segment{{CapName: "recover", Args: []string{"yes"}}}}},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := ExecuteCommand(context.Background(), cmd, reg, strings.NewReader(""), &buf, io.Discard)
+	if err != nil {
+		t.Fatalf("expected no error after recovery, got %v", err)
+	}
+	output := buf.String()
+	if strings.Contains(output, "no") {
+		t.Error("skip should not have run")
+	}
+	if !strings.Contains(output, "yes") {
+		t.Error("recover should have run")
+	}
+}
+
 func TestExecuteCancellation(t *testing.T) {
 	reg := cap.NewRegistry()
 	reg.Register(&echoCap{name: "echo"})

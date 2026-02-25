@@ -184,3 +184,135 @@ func TestParseRedirectOutMissingFile(t *testing.T) {
 		t.Fatal("expected error for redirect without file")
 	}
 }
+
+// --- ParseCommand tests ---
+
+func TestParseCommandSinglePipeline(t *testing.T) {
+	reg := newTestRegistry()
+	cmd, err := ParseCommand([]string{"grep", "foo", "¦", "wc"}, reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cmd.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(cmd.Steps))
+	}
+	if len(cmd.Steps[0].Pipeline.Segments) != 2 {
+		t.Fatalf("expected 2 segments, got %d", len(cmd.Steps[0].Pipeline.Segments))
+	}
+}
+
+func TestParseCommandAndThen(t *testing.T) {
+	reg := newTestRegistry()
+	cmd, err := ParseCommand([]string{"grep", "foo", "＆＆", "cat"}, reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cmd.Steps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(cmd.Steps))
+	}
+	if cmd.Steps[0].Op != Operator(OpAndThen) {
+		t.Errorf("expected and-then operator, got %q", cmd.Steps[0].Op)
+	}
+}
+
+func TestParseCommandOrElse(t *testing.T) {
+	reg := newTestRegistry()
+	cmd, err := ParseCommand([]string{"grep", "foo", "‖", "cat"}, reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cmd.Steps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(cmd.Steps))
+	}
+	if cmd.Steps[0].Op != Operator(OpOrElse) {
+		t.Errorf("expected or-else operator, got %q", cmd.Steps[0].Op)
+	}
+}
+
+func TestParseCommandSequential(t *testing.T) {
+	reg := newTestRegistry()
+	cmd, err := ParseCommand([]string{"cat", "；", "grep", "foo"}, reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cmd.Steps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(cmd.Steps))
+	}
+	if cmd.Steps[0].Op != Operator(OpSequential) {
+		t.Errorf("expected sequential operator, got %q", cmd.Steps[0].Op)
+	}
+}
+
+func TestParseCommandMixed(t *testing.T) {
+	reg := newTestRegistry()
+	// grep foo ¦ wc ＆＆ cat ‖ sort
+	args := []string{"grep", "foo", "¦", "wc", "＆＆", "cat", "‖", "sort"}
+	cmd, err := ParseCommand(args, reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cmd.Steps) != 3 {
+		t.Fatalf("expected 3 steps, got %d", len(cmd.Steps))
+	}
+	// First step has 2 pipeline segments (grep | wc)
+	if len(cmd.Steps[0].Pipeline.Segments) != 2 {
+		t.Errorf("step 0: expected 2 segments, got %d", len(cmd.Steps[0].Pipeline.Segments))
+	}
+	if cmd.Steps[0].Op != Operator(OpAndThen) {
+		t.Errorf("step 0: expected and-then, got %q", cmd.Steps[0].Op)
+	}
+	if cmd.Steps[1].Op != Operator(OpOrElse) {
+		t.Errorf("step 1: expected or-else, got %q", cmd.Steps[1].Op)
+	}
+}
+
+func TestParseCommandWithRedirects(t *testing.T) {
+	reg := newTestRegistry()
+	// sort ‹ in.txt ＆＆ cat › out.txt
+	args := []string{"sort", "‹", "in.txt", "＆＆", "cat", "›", "out.txt"}
+	cmd, err := ParseCommand(args, reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cmd.Steps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(cmd.Steps))
+	}
+	if cmd.Steps[0].Pipeline.RedirectIn != "in.txt" {
+		t.Errorf("step 0: expected redirect in 'in.txt', got %q", cmd.Steps[0].Pipeline.RedirectIn)
+	}
+	if cmd.Steps[1].Pipeline.RedirectOut != "out.txt" {
+		t.Errorf("step 1: expected redirect out 'out.txt', got %q", cmd.Steps[1].Pipeline.RedirectOut)
+	}
+}
+
+func TestParseCommandEmptyBefore(t *testing.T) {
+	reg := newTestRegistry()
+	_, err := ParseCommand([]string{"＆＆", "cat"}, reg)
+	if err == nil {
+		t.Fatal("expected error for empty pipeline before operator")
+	}
+}
+
+func TestParseCommandEmptyAfter(t *testing.T) {
+	reg := newTestRegistry()
+	_, err := ParseCommand([]string{"cat", "＆＆"}, reg)
+	if err == nil {
+		t.Fatal("expected error for empty pipeline after operator")
+	}
+}
+
+func TestParseCommandEmptyBetween(t *testing.T) {
+	reg := newTestRegistry()
+	_, err := ParseCommand([]string{"cat", "＆＆", "‖", "sort"}, reg)
+	if err == nil {
+		t.Fatal("expected error for empty pipeline between operators")
+	}
+}
+
+func TestParseCommandEmpty(t *testing.T) {
+	reg := newTestRegistry()
+	_, err := ParseCommand([]string{}, reg)
+	if err == nil {
+		t.Fatal("expected error for empty command")
+	}
+}

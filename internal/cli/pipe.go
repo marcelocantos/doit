@@ -8,14 +8,14 @@ import (
 	"github.com/marcelocantos/doit/internal/pipeline"
 )
 
-func parsePipeline(args []string, reg *cap.Registry) (*pipeline.Pipeline, error) {
-	return pipeline.Parse(args, reg)
+func parseCommand(args []string, reg *cap.Registry) (*pipeline.Command, error) {
+	return pipeline.ParseCommand(args, reg)
 }
 
-func validatePipeline(p *pipeline.Pipeline, reg *cap.Registry) error {
-	return pipeline.Validate(p, reg)
+func validateCommand(cmd *pipeline.Command, reg *cap.Registry) error {
+	return pipeline.ValidateCommand(cmd, reg)
 }
 
-func executePipeline(ctx context.Context, p *pipeline.Pipeline, reg *cap.Registry, stdin io.Reader, stdout, stderr io.Writer) error {
-	return pipeline.Execute(ctx, p, reg, stdin, stdout, stderr)
+func executeCommand(ctx context.Context, cmd *pipeline.Command, reg *cap.Registry, stdin io.Reader, stdout, stderr io.Writer) error {
+	return pipeline.ExecuteCommand(ctx, cmd, reg, stdin, stdout, stderr)
 }

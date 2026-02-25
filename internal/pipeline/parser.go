@@ -85,6 +85,70 @@ func parseSegment(args []string, reg *cap.Registry) (Segment, error) {
 	}, nil
 }
 
+// ParseCommand splits args on compound operators (＆＆, ‖, ；) to get
+// pipeline sections, then parses each section as a Pipeline.
+// If no compound operators are present, the result is a single-step Command.
+func ParseCommand(args []string, reg *cap.Registry) (*Command, error) {
+	if len(args) == 0 {
+		return nil, fmt.Errorf("empty command")
+	}
+
+	cmd := &Command{}
+	var current []string
+
+	for _, arg := range args {
+		if op := toOperator(arg); op != "" {
+			if len(current) == 0 {
+				return nil, fmt.Errorf("empty pipeline before %s", arg)
+			}
+			p, err := Parse(current, reg)
+			if err != nil {
+				return nil, err
+			}
+			cmd.Steps = append(cmd.Steps, CommandStep{Pipeline: p, Op: op})
+			current = nil
+		} else {
+			current = append(current, arg)
+		}
+	}
+
+	// Final section (no trailing operator).
+	if len(current) == 0 {
+		return nil, fmt.Errorf("empty pipeline after compound operator")
+	}
+	p, err := Parse(current, reg)
+	if err != nil {
+		return nil, err
+	}
+	cmd.Steps = append(cmd.Steps, CommandStep{Pipeline: p})
+
+	return cmd, nil
+}
+
+// toOperator checks if a token is a compound operator.
+func toOperator(token string) Operator {
+	switch token {
+	case OpAndThen:
+		return Operator(OpAndThen)
+	case OpOrElse:
+		return Operator(OpOrElse)
+	case OpSequential:
+		return Operator(OpSequential)
+	default:
+		return ""
+	}
+}
+
+// ValidateCommand validates all pipelines within a compound command.
+func ValidateCommand(cmd *Command, reg *cap.Registry) error {
+	for i, step := range cmd.Steps {
+		if err := Validate(step.Pipeline, reg); err != nil {
+			return fmt.Errorf("pipeline %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
 // Validate checks all segments' args and tier permissions.
 // Call this before Execute to fail fast.
 func Validate(p *Pipeline, reg *cap.Registry) error {

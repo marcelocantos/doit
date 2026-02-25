@@ -25,3 +25,20 @@ type Pipeline struct {
 	RedirectIn  string // file path for stdin redirect (‹), empty if none
 	RedirectOut string // file path for stdout redirect (›), empty if none
 }
+
+// Operator represents a compound-command connector between pipelines.
+type Operator string
+
+// CommandStep is one pipeline within a compound command, together with
+// the operator that connects it to the next step. The last step's Op is
+// unused.
+type CommandStep struct {
+	Pipeline *Pipeline
+	Op       Operator // operator AFTER this pipeline (connects to next step)
+}
+
+// Command represents a compound command: one or more pipelines connected
+// by ＆＆, ‖, or ； operators.
+type Command struct {
+	Steps []CommandStep
+}
