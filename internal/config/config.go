@@ -8,12 +8,14 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/marcelocantos/doit/internal/cap"
+	"github.com/marcelocantos/doit/internal/rules"
 )
 
 // Config holds the global doit configuration.
 type Config struct {
-	Tiers TierConfig `yaml:"tiers"`
-	Audit AuditConfig `yaml:"audit"`
+	Tiers TierConfig                     `yaml:"tiers"`
+	Audit AuditConfig                    `yaml:"audit"`
+	Rules map[string]rules.CapRuleConfig `yaml:"rules"`
 }
 
 // TierConfig controls which safety tiers are enabled.
@@ -81,6 +83,41 @@ func LoadFrom(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// DefaultRules returns the default argument-level rules.
+func DefaultRules() map[string]rules.CapRuleConfig {
+	return map[string]rules.CapRuleConfig{
+		"make": {
+			RejectFlags: []string{"-j"},
+		},
+		"git": {
+			Subcommands: map[string]rules.SubRuleConfig{
+				"push":  {RejectFlags: []string{"--force", "-f", "--force-with-lease"}},
+				"reset": {RejectFlags: []string{"--hard"}},
+			},
+		},
+	}
+}
+
+// ApplyRules creates a RuleSet from the config and sets it on the registry.
+// Hardcoded safety rules are always included. Programmatic default rules
+// (like git checkout .) are added as config rules so they can be bypassed
+// with --retry.
+func (c *Config) ApplyRules(reg *cap.Registry) {
+	rs := rules.NewRuleSet(rules.Hardcoded()...)
+	cfgRules := c.Rules
+	if cfgRules == nil {
+		cfgRules = DefaultRules()
+	}
+	for name, capRule := range cfgRules {
+		for _, fn := range rules.CompileCapRule(name, capRule) {
+			rs.AddConfig(fn)
+		}
+	}
+	// Programmatic default rules that can't be expressed in YAML config.
+	rs.AddConfig(rules.CheckGitCheckoutAll)
+	reg.SetRules(rs)
 }
 
 // ApplyTiers sets the registry tier permissions from the config.

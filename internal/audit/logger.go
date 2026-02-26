@@ -49,7 +49,7 @@ func NewLogger(path string) (*Logger, error) {
 }
 
 // Log writes an audit entry to the log file.
-func (l *Logger) Log(pipeline string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, cwd string) error {
+func (l *Logger) Log(pipeline string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, cwd string, retry bool) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -61,6 +61,7 @@ func (l *Logger) Log(pipeline string, segments, tiers []string, exitCode int, er
 		Pipeline: pipeline,
 		Segments: segments,
 		Tiers:    tiers,
+		Retry:    retry,
 		ExitCode: exitCode,
 		Error:    errMsg,
 		Duration: float64(duration.Microseconds()) / 1000.0,

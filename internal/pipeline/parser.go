@@ -140,10 +140,10 @@ func toOperator(token string) Operator {
 }
 
 // ValidateCommand validates all pipelines within a compound command.
-// When allow is true, config rules are bypassed.
-func ValidateCommand(cmd *Command, reg *cap.Registry, allow bool) error {
+// When retry is true, config rules are bypassed.
+func ValidateCommand(cmd *Command, reg *cap.Registry, retry bool) error {
 	for i, step := range cmd.Steps {
-		if err := Validate(step.Pipeline, reg, allow); err != nil {
+		if err := Validate(step.Pipeline, reg, retry); err != nil {
 			return fmt.Errorf("pipeline %d: %w", i, err)
 		}
 	}
@@ -151,9 +151,9 @@ func ValidateCommand(cmd *Command, reg *cap.Registry, allow bool) error {
 }
 
 // Validate checks all segments' args and tier permissions.
-// Call this before Execute to fail fast. When allow is true, config rules
+// Call this before Execute to fail fast. When retry is true, config rules
 // are bypassed.
-func Validate(p *Pipeline, reg *cap.Registry, allow bool) error {
+func Validate(p *Pipeline, reg *cap.Registry, retry bool) error {
 	// Output redirects are write operations — require TierWrite.
 	if p.RedirectOut != "" {
 		if err := reg.CheckTier(cap.TierWrite); err != nil {
@@ -168,7 +168,7 @@ func Validate(p *Pipeline, reg *cap.Registry, allow bool) error {
 		if err := reg.CheckTier(c.Tier()); err != nil {
 			return fmt.Errorf("segment %d (%s): %w", i, seg.CapName, err)
 		}
-		if err := reg.CheckRules(seg.CapName, seg.Args, allow); err != nil {
+		if err := reg.CheckRules(seg.CapName, seg.Args, retry); err != nil {
 			return fmt.Errorf("segment %d (%s): %w", i, seg.CapName, err)
 		}
 		if err := c.Validate(seg.Args); err != nil {

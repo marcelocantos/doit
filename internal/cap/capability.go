@@ -6,6 +6,8 @@ import (
 	"io"
 	"sort"
 	"sync"
+
+	"github.com/marcelocantos/doit/internal/rules"
 )
 
 // Tier represents the safety level of a capability.
@@ -74,9 +76,11 @@ type Registry struct {
 	mu    sync.RWMutex
 	caps  map[string]Capability
 	tiers map[Tier]bool
+	rules *rules.RuleSet
 }
 
 // NewRegistry creates a registry with all tiers enabled except Dangerous.
+// Hardcoded safety rules are always active.
 func NewRegistry() *Registry {
 	return &Registry{
 		caps: make(map[string]Capability),
@@ -86,6 +90,7 @@ func NewRegistry() *Registry {
 			TierWrite:     true,
 			TierDangerous: false,
 		},
+		rules: rules.NewRuleSet(rules.Hardcoded()...),
 	}
 }
 
@@ -122,6 +127,26 @@ func (r *Registry) SetTier(t Tier, enabled bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tiers[t] = enabled
+}
+
+// SetRules replaces the rule set. Config-driven rules are added on top of
+// the hardcoded safety rules which are always present.
+func (r *Registry) SetRules(rs *rules.RuleSet) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rules = rs
+}
+
+// CheckRules validates args against all rules for the named capability.
+// When retry is true, only hardcoded rules are checked (config rules are
+// bypassed for this invocation).
+func (r *Registry) CheckRules(capName string, args []string, retry bool) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.rules == nil {
+		return nil
+	}
+	return r.rules.Check(capName, args, retry)
 }
 
 type contextKey struct{}

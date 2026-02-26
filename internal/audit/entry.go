@@ -10,6 +10,7 @@ type Entry struct {
 	Pipeline string    `json:"pipeline"`           // raw pipeline description
 	Segments []string  `json:"segments"`            // capability names
 	Tiers    []string  `json:"tiers"`               // tier of each segment
+	Retry    bool      `json:"retry,omitempty"`     // true if --retry was used
 	ExitCode int       `json:"exit_code"`           // 0 = success
 	Error    string    `json:"error,omitempty"`      // error message if failed
 	Duration float64   `json:"duration_ms"`          // execution time in milliseconds

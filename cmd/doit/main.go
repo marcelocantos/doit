@@ -36,6 +36,7 @@ func run() int {
 	reg := cap.NewRegistry()
 	builtin.RegisterAll(reg)
 	cfg.ApplyTiers(reg)
+	cfg.ApplyRules(reg)
 
 	// Set up audit logger.
 	logger, err := audit.NewLogger(cfg.Audit.Path)
@@ -51,7 +52,15 @@ func run() int {
 
 	switch os.Args[1] {
 	case "--pipe":
-		return cli.RunPipe(ctx, reg, logger, os.Args[2:], os.Stdin, os.Stdout, os.Stderr)
+		pipeArgs := os.Args[2:]
+		retry := false
+		if len(pipeArgs) > 0 && pipeArgs[0] == "--retry" {
+			retry = true
+			pipeArgs = pipeArgs[1:]
+		}
+		return cli.RunPipe(ctx, reg, logger, pipeArgs, os.Stdin, os.Stdout, os.Stderr, retry)
+	case "--retry":
+		return cli.RunDirect(ctx, reg, logger, os.Args[2:], true)
 	case "--list":
 		tierFilter := ""
 		args := os.Args[2:]
@@ -73,6 +82,6 @@ func run() int {
 		return 0
 	default:
 		// Everything else is a direct capability invocation.
-		return cli.RunDirect(ctx, reg, logger, os.Args[1:])
+		return cli.RunDirect(ctx, reg, logger, os.Args[1:], false)
 	}
 }

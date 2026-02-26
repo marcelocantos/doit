@@ -64,6 +64,32 @@ If a command is rejected due to its tier, do not attempt to bypass it.
     doit --list                  # show all capabilities and their tiers
     doit --list --tier read      # show only read-tier capabilities
 
+## Rule bypass with --retry
+
+Some commands are blocked by config rules (e.g., `make -j`, `git push --force`,
+`git checkout .`). When blocked, the error message will tell you how to retry
+with `--retry`. Only do this after the user has explicitly approved the operation.
+
+    doit --retry make -j4 all
+    doit --retry git push --force origin master
+    doit --retry git checkout .
+    doit --pipe --retry make -j4 ＆＆ git push --force
+
+The `--retry` flag:
+- Only bypasses config-based rules, never hardcoded safety rules
+- Only applies to a single invocation
+- Is recorded in the audit log
+
+### Three types of denials
+
+1. **Tier denied** — The capability's tier (e.g., dangerous) is disabled.
+   Do not retry. This cannot be bypassed.
+2. **Hardcoded rule** — A safety rule permanently blocks the operation
+   (e.g., `rm -rf /`). Do not retry. This cannot be bypassed.
+3. **Config rule** — A configurable rule blocks the operation (e.g.,
+   `make -j`, `git push --force`, `git checkout .`). Ask the user for
+   permission, then retry with `doit --retry <cap> [args...]`.
+
 ## Audit log
 
 All invocations are logged to a tamper-evident audit trail. Do not attempt
@@ -77,6 +103,7 @@ to modify or delete the audit log.
 1. Always use `doit` instead of running commands directly.
 2. Use `doit --pipe` with `¦` for pipelines instead of shell `|`.
 3. Use `›` and `‹` for redirects instead of shell `>` and `<`.
-4. Respect tier denials — do not retry denied commands.
+4. Respect tier denials and hardcoded blocks — do not retry.
+   Config rule blocks can be retried with `--retry` after user approval.
 5. Use `doit --list` to discover available capabilities.
 6. Every invocation is audited. Work transparently.

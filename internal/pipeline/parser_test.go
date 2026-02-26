@@ -150,7 +150,7 @@ func TestValidateTierDenied(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = Validate(p, reg)
+	err = Validate(p, reg, false)
 	if err == nil {
 		t.Fatal("expected error for disabled tier")
 	}
@@ -162,7 +162,7 @@ func TestValidateTierAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Validate(p, reg); err != nil {
+	if err := Validate(p, reg, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
