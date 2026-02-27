@@ -7,17 +7,20 @@ MAKEFLAGS += -j$(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || ech
 
 all: build
 
-build:
+build: internal/cli/help_agent.md
 	go build $(LDFLAGS) -o bin/doit ./cmd/doit
 
-test:
+internal/cli/help_agent.md: agents-guide.md
+	cp agents-guide.md internal/cli/help_agent.md
+
+test: internal/cli/help_agent.md
 	go test ./...
 
-vet:
+vet: internal/cli/help_agent.md
 	go vet ./...
 
 clean:
-	rm -rf bin/
+	rm -rf bin/ internal/cli/help_agent.md
 
 install: build
 	cp bin/doit $(GOPATH)/bin/doit

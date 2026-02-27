@@ -7,3 +7,4 @@ cover.out
 *.swp
 *.swo
 .claude/settings.local.json
+internal/cli/help_agent.md
