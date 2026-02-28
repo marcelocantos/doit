@@ -27,6 +27,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Generate embedded files
+        run: cp agents-guide.md internal/cli/help_agent.md
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
