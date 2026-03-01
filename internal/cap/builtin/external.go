@@ -29,6 +29,13 @@ func runExternal(ctx context.Context, name string, args []string, stdin io.Reade
 	if cwd := cap.CwdFromContext(ctx); cwd != "" {
 		cmd.Dir = cwd
 	}
+	if env := cap.EnvFromContext(ctx); env != nil {
+		envSlice := make([]string, 0, len(env))
+		for k, v := range env {
+			envSlice = append(envSlice, k+"="+v)
+		}
+		cmd.Env = envSlice
+	}
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	if stderr != nil {

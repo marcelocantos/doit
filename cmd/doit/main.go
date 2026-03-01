@@ -10,7 +10,10 @@ import (
 	"github.com/marcelocantos/doit/internal/cap"
 	"github.com/marcelocantos/doit/internal/cap/builtin"
 	"github.com/marcelocantos/doit/internal/cli"
+	"github.com/marcelocantos/doit/internal/client"
 	"github.com/marcelocantos/doit/internal/config"
+	"github.com/marcelocantos/doit/internal/daemon"
+	"github.com/marcelocantos/doit/internal/ipc"
 )
 
 var version = "dev"
@@ -51,6 +54,8 @@ func run() int {
 	defer stop()
 
 	switch os.Args[1] {
+	case "--daemon":
+		return runDaemon(ctx, cfg, reg, logger)
 	case "--list":
 		tierFilter := ""
 		args := os.Args[2:]
@@ -71,12 +76,24 @@ func run() int {
 		fmt.Printf("doit %s\n", version)
 		return 0
 	default:
-		return runCommand(ctx, reg, logger, os.Args[1:])
+		return runCommand(ctx, cfg, reg, logger, os.Args[1:])
 	}
 }
 
-// runCommand parses optional --retry flag, then delegates to cli.RunCommand.
-func runCommand(ctx context.Context, reg *cap.Registry, logger *audit.Logger, args []string) int {
+// runDaemon starts the daemon server. It blocks until the context is
+// cancelled or the idle timeout fires.
+func runDaemon(ctx context.Context, cfg *config.Config, reg *cap.Registry, logger *audit.Logger) int {
+	srv := daemon.New(cfg, reg, logger, cfg.Daemon.IdleTimeoutDuration())
+	if err := srv.Run(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "doit daemon: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// runCommand routes execution through the daemon client when available,
+// falling back to in-process execution.
+func runCommand(ctx context.Context, cfg *config.Config, reg *cap.Registry, logger *audit.Logger, args []string) int {
 	retry := false
 	if len(args) > 0 && args[0] == "--retry" {
 		retry = true
@@ -84,5 +101,43 @@ func runCommand(ctx context.Context, reg *cap.Registry, logger *audit.Logger, ar
 	}
 
 	cwd, _ := os.Getwd()
-	return cli.RunCommand(ctx, reg, logger, args, os.Stdin, os.Stdout, os.Stderr, retry, cwd)
+
+	if shouldUseDaemon(cfg) {
+		selfPath, _ := os.Executable()
+		conn, err := client.ConnectOrSpawn(ctx, selfPath)
+		if err != nil {
+			if cfg.Daemon.Enabled != nil && *cfg.Daemon.Enabled {
+				fmt.Fprintf(os.Stderr, "doit: daemon: %v\n", err)
+				return 2
+			}
+			// Auto mode: fall through to in-process.
+		} else {
+			defer conn.Close()
+			stopSig := client.ForwardSignals(conn)
+			defer stopSig()
+
+			req := &ipc.Request{
+				Args:  args,
+				Cwd:   cwd,
+				Retry: retry,
+				Env:   ipc.CaptureEnv(),
+			}
+			code, err := client.Relay(ctx, conn, req, os.Stdin, os.Stdout, os.Stderr)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "doit: %v\n", err)
+				return 2
+			}
+			return code
+		}
+	}
+
+	// In-process fallback.
+	return cli.RunCommand(ctx, reg, logger, args, os.Stdin, os.Stdout, os.Stderr, retry, cwd, nil)
+}
+
+func shouldUseDaemon(cfg *config.Config) bool {
+	if cfg.Daemon.Enabled != nil {
+		return *cfg.Daemon.Enabled
+	}
+	return true // auto: try daemon, fall back to in-process
 }

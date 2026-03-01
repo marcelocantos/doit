@@ -176,6 +176,20 @@ func CwdFromContext(ctx context.Context) string {
 	return cwd
 }
 
+type envKey struct{}
+
+// NewEnvContext returns a context with environment variables attached.
+func NewEnvContext(ctx context.Context, env map[string]string) context.Context {
+	return context.WithValue(ctx, envKey{}, env)
+}
+
+// EnvFromContext retrieves the environment variables from a context.
+// Returns nil if not set (meaning use the current process environment).
+func EnvFromContext(ctx context.Context) map[string]string {
+	env, _ := ctx.Value(envKey{}).(map[string]string)
+	return env
+}
+
 // All returns all registered capabilities sorted by name.
 func (r *Registry) All() []Capability {
 	r.mu.RLock()

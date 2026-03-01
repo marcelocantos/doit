@@ -17,7 +17,7 @@ import (
 // RunCommand executes a command (single capability, pipeline, or compound).
 // All invocations go through ParseCommand, which handles the degenerate
 // single-segment case. When retry is true, config rules are bypassed.
-func RunCommand(ctx context.Context, reg *cap.Registry, logger *audit.Logger, args []string, stdin io.Reader, stdout, stderr io.Writer, retry bool, cwd string) int {
+func RunCommand(ctx context.Context, reg *cap.Registry, logger *audit.Logger, args []string, stdin io.Reader, stdout, stderr io.Writer, retry bool, cwd string, env map[string]string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "doit: missing command")
 		return 1
@@ -37,6 +37,9 @@ func RunCommand(ctx context.Context, reg *cap.Registry, logger *audit.Logger, ar
 	ctx = cap.NewContext(ctx, reg)
 	if cwd != "" {
 		ctx = cap.NewCwdContext(ctx, cwd)
+	}
+	if env != nil {
+		ctx = cap.NewEnvContext(ctx, env)
 	}
 
 	start := time.Now()
