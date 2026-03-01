@@ -57,6 +57,10 @@ Command → []CommandStep (connected by ＆＆/‖/；)
 3. Set the appropriate tier (read/build/write/dangerous).
 4. Add argument validation in `Validate()` for any dangerous flag patterns.
 
+## TODO
+
+Open work items are tracked in `docs/todo.md`.
+
 ## Generated files
 
 `internal/cli/help_agent.md` is generated from `agents-guide.md` during build.
