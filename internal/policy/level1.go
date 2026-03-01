@@ -89,7 +89,7 @@ func checkRmCatastrophic(req *Request) *Result {
 		if seg.CapName != "rm" {
 			continue
 		}
-		if !hasAnyFlag(seg.Args, "-r", "-R") {
+		if !HasAnyFlag(seg.Args, "-r", "-R") {
 			continue
 		}
 		for _, arg := range seg.Args {
@@ -186,7 +186,7 @@ func compileConfigRules(capName string, cfg rules.CapRuleConfig) []Rule {
 					if seg.CapName != name {
 						continue
 					}
-					if hasAnyFlag(seg.Args, flags...) {
+					if HasAnyFlag(seg.Args, flags...) {
 						return &Result{
 							Decision: Deny,
 							Level:    1,
@@ -214,7 +214,7 @@ func compileConfigRules(capName string, cfg rules.CapRuleConfig) []Rule {
 						if seg.CapName != name || len(seg.Args) == 0 || seg.Args[0] != sub {
 							continue
 						}
-						if hasAnyFlag(seg.Args[1:], flags...) {
+						if HasAnyFlag(seg.Args[1:], flags...) {
 							return &Result{
 								Decision: Deny,
 								Level:    1,
@@ -232,10 +232,10 @@ func compileConfigRules(capName string, cfg rules.CapRuleConfig) []Rule {
 	return result
 }
 
-// hasAnyFlag checks whether any element in args matches one of the given flags.
+// HasAnyFlag checks whether any element in args matches one of the given flags.
 // Handles exact match, combined short flags, short flag with value, and
 // long flag with =.
-func hasAnyFlag(args []string, flags ...string) bool {
+func HasAnyFlag(args []string, flags ...string) bool {
 	for _, arg := range args {
 		if arg == "" || arg[0] != '-' {
 			continue

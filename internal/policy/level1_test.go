@@ -416,8 +416,8 @@ func TestHasAnyFlag(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := hasAnyFlag(tt.args, tt.flags...); got != tt.want {
-				t.Errorf("hasAnyFlag(%v, %v) = %v, want %v", tt.args, tt.flags, got, tt.want)
+			if got := HasAnyFlag(tt.args, tt.flags...); got != tt.want {
+				t.Errorf("HasAnyFlag(%v, %v) = %v, want %v", tt.args, tt.flags, got, tt.want)
 			}
 		})
 	}

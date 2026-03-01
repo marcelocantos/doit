@@ -23,7 +23,9 @@ type Config struct {
 
 // PolicyConfig controls the policy engine.
 type PolicyConfig struct {
-	Level1Enabled bool `yaml:"level1_enabled"`
+	Level1Enabled bool   `yaml:"level1_enabled"`
+	Level2Enabled bool   `yaml:"level2_enabled"`
+	Level2Path    string `yaml:"level2_path,omitempty"`
 }
 
 // DaemonConfig controls daemon behavior.
@@ -78,6 +80,7 @@ func DefaultConfig() *Config {
 		},
 		Policy: PolicyConfig{
 			Level1Enabled: true,
+			Level2Enabled: true,
 		},
 	}
 }

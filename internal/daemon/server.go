@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -28,6 +29,7 @@ type Server struct {
 	reg         *cap.Registry
 	logger      *audit.Logger
 	policyL1    *policy.Level1
+	policyL2    *policy.Level2
 	idleTimeout time.Duration
 
 	mu        sync.Mutex
@@ -37,6 +39,7 @@ type Server struct {
 
 // New creates a daemon server. If the config has Level1 policy enabled,
 // the deterministic policy engine is created from the config rules.
+// If Level2 is enabled, the learned policy store is loaded.
 func New(cfg *config.Config, reg *cap.Registry, logger *audit.Logger, idleTimeout time.Duration) *Server {
 	var l1 *policy.Level1
 	if cfg.Policy.Level1Enabled {
@@ -46,11 +49,34 @@ func New(cfg *config.Config, reg *cap.Registry, logger *audit.Logger, idleTimeou
 		}
 		l1 = policy.NewLevel1(cfgRules)
 	}
+
+	var l2 *policy.Level2
+	if cfg.Policy.Level2Enabled {
+		storePath := cfg.Policy.Level2Path
+		if storePath == "" {
+			storePath = policy.DefaultStorePath()
+		}
+		entries, err := policy.LoadStore(storePath)
+		if err != nil {
+			log.Printf("doit: warning: failed to load learned policy: %v", err)
+		} else {
+			// Warn about entries due for review.
+			for _, e := range entries {
+				if e.Approved && !e.Review.NextReview.IsZero() && policy.NeedsReview(e.Review.NextReview) {
+					log.Printf("doit: learned policy %q is overdue for review (due %s)",
+						e.ID, e.Review.NextReview.Format("2006-01-02"))
+				}
+			}
+			l2 = policy.NewLevel2(entries)
+		}
+	}
+
 	return &Server{
 		cfg:         cfg,
 		reg:         reg,
 		logger:      logger,
 		policyL1:    l1,
+		policyL2:    l2,
 		idleTimeout: idleTimeout,
 	}
 }
@@ -273,7 +299,11 @@ func (s *Server) evaluatePolicy(req ipc.Request) (result *policy.Result, segment
 		SafetyArg:      req.SafetyArg,
 	}
 
-	return s.policyL1.Evaluate(policyReq), segments, tiers
+	result = s.policyL1.Evaluate(policyReq)
+	if result.Decision == policy.Escalate && s.policyL2 != nil {
+		result = s.policyL2.Evaluate(policyReq)
+	}
+	return result, segments, tiers
 }
 
 // logPolicyDenial writes an audit entry for a policy denial.
