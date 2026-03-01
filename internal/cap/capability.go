@@ -149,17 +149,31 @@ func (r *Registry) CheckRules(capName string, args []string, retry bool) error {
 	return r.rules.Check(capName, args, retry)
 }
 
-type contextKey struct{}
+type registryKey struct{}
 
 // NewContext returns a context with the registry attached.
 func NewContext(ctx context.Context, reg *Registry) context.Context {
-	return context.WithValue(ctx, contextKey{}, reg)
+	return context.WithValue(ctx, registryKey{}, reg)
 }
 
 // RegistryFromContext retrieves the registry from a context.
 func RegistryFromContext(ctx context.Context) (*Registry, bool) {
-	reg, ok := ctx.Value(contextKey{}).(*Registry)
+	reg, ok := ctx.Value(registryKey{}).(*Registry)
 	return reg, ok
+}
+
+type cwdKey struct{}
+
+// NewCwdContext returns a context with the working directory attached.
+func NewCwdContext(ctx context.Context, cwd string) context.Context {
+	return context.WithValue(ctx, cwdKey{}, cwd)
+}
+
+// CwdFromContext retrieves the working directory from a context.
+// Returns empty string if not set.
+func CwdFromContext(ctx context.Context) string {
+	cwd, _ := ctx.Value(cwdKey{}).(string)
+	return cwd
 }
 
 // All returns all registered capabilities sorted by name.

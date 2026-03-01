@@ -5,86 +5,47 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/marcelocantos/doit/internal/audit"
 	"github.com/marcelocantos/doit/internal/cap"
 	"github.com/marcelocantos/doit/internal/cap/builtin"
+	"github.com/marcelocantos/doit/internal/pipeline"
 )
 
-// RunDirect executes a single capability directly: doit <cap> [args...]
-// When retry is true, config rules are bypassed (hardcoded rules still apply).
-func RunDirect(ctx context.Context, reg *cap.Registry, logger *audit.Logger, args []string, retry bool) int {
+// RunCommand executes a command (single capability, pipeline, or compound).
+// All invocations go through ParseCommand, which handles the degenerate
+// single-segment case. When retry is true, config rules are bypassed.
+func RunCommand(ctx context.Context, reg *cap.Registry, logger *audit.Logger, args []string, stdin io.Reader, stdout, stderr io.Writer, retry bool, cwd string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "doit: missing capability name")
+		fmt.Fprintln(stderr, "doit: missing command")
 		return 1
 	}
 
-	name := args[0]
-	capArgs := args[1:]
-
-	c, err := reg.Lookup(name)
+	cmd, err := pipeline.ParseCommand(args, reg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "doit: %v\n", err)
+		fmt.Fprintf(stderr, "doit: %v\n", err)
 		return 1
 	}
 
-	if err := reg.CheckTier(c.Tier()); err != nil {
-		fmt.Fprintf(os.Stderr, "doit: %s: %v\n", name, err)
-		return 1
-	}
-
-	if err := reg.CheckRules(name, capArgs, retry); err != nil {
-		fmt.Fprintf(os.Stderr, "doit: %s: %v\n", name, err)
-		return 1
-	}
-
-	if err := c.Validate(capArgs); err != nil {
-		fmt.Fprintf(os.Stderr, "doit: %s: %v\n", name, err)
+	if err := pipeline.ValidateCommand(cmd, reg, retry); err != nil {
+		fmt.Fprintf(stderr, "doit: %v\n", err)
 		return 1
 	}
 
 	ctx = cap.NewContext(ctx, reg)
+	if cwd != "" {
+		ctx = cap.NewCwdContext(ctx, cwd)
+	}
+
 	start := time.Now()
-	err = c.Run(ctx, capArgs, os.Stdin, os.Stdout, os.Stderr)
+	err = pipeline.ExecuteCommand(ctx, cmd, reg, stdin, stdout, stderr)
 	duration := time.Since(start)
 
-	exitCode, errMsg := resolveError(err)
+	exitCode, errMsg := resolveError(err, stderr)
 
-	logAudit(logger, "direct:"+name+" "+strings.Join(capArgs, " "), []string{name}, []string{c.Tier().String()}, exitCode, errMsg, duration, retry)
-
-	return exitCode
-}
-
-// RunPipe executes a compound command: doit --pipe <args...>
-// When retry is true, config rules are bypassed (hardcoded rules still apply).
-func RunPipe(ctx context.Context, reg *cap.Registry, logger *audit.Logger, args []string, stdin io.Reader, stdout, stderr io.Writer, retry bool) int {
-	if len(args) == 0 {
-		fmt.Fprintln(stderr, "doit pipe: empty pipeline")
-		return 1
-	}
-
-	cmd, err := parseCommand(args, reg)
-	if err != nil {
-		fmt.Fprintf(stderr, "doit pipe: %v\n", err)
-		return 1
-	}
-
-	if err := validateCommand(cmd, reg, retry); err != nil {
-		fmt.Fprintf(stderr, "doit pipe: %v\n", err)
-		return 1
-	}
-
-	ctx = cap.NewContext(ctx, reg)
-	start := time.Now()
-	err = executeCommand(ctx, cmd, reg, stdin, stdout, stderr)
-	duration := time.Since(start)
-
-	exitCode, errMsg := resolveError(err)
-
-	// Build audit info from all pipelines in the command.
+	// Build audit info from all segments.
 	pipelineStr := strings.Join(args, " ")
 	var segments, tiers []string
 	for _, step := range cmd.Steps {
@@ -96,7 +57,7 @@ func RunPipe(ctx context.Context, reg *cap.Registry, logger *audit.Logger, args 
 		}
 	}
 
-	logAudit(logger, pipelineStr, segments, tiers, exitCode, errMsg, duration, retry)
+	logAudit(logger, pipelineStr, segments, tiers, exitCode, errMsg, duration, retry, cwd)
 
 	return exitCode
 }
@@ -105,7 +66,7 @@ func RunPipe(ctx context.Context, reg *cap.Registry, logger *audit.Logger, args 
 // exited with non-zero status), the code is propagated silently — the
 // command's own stderr output is sufficient. For other errors, doit reports
 // them on stderr.
-func resolveError(err error) (exitCode int, errMsg string) {
+func resolveError(err error, stderr io.Writer) (exitCode int, errMsg string) {
 	if err == nil {
 		return 0, ""
 	}
@@ -113,15 +74,14 @@ func resolveError(err error) (exitCode int, errMsg string) {
 	if errors.As(err, &exitErr) {
 		return exitErr.Code, ""
 	}
-	fmt.Fprintf(os.Stderr, "doit: %v\n", err)
+	fmt.Fprintf(stderr, "doit: %v\n", err)
 	return 2, err.Error()
 }
 
-func logAudit(logger *audit.Logger, pipeline string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, retry bool) {
+func logAudit(logger *audit.Logger, pipelineStr string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, retry bool, cwd string) {
 	if logger == nil {
 		return
 	}
-	cwd, _ := os.Getwd()
 	// Best-effort audit logging — don't fail the command if audit fails.
-	_ = logger.Log(pipeline, segments, tiers, exitCode, errMsg, duration, cwd, retry)
+	_ = logger.Log(pipelineStr, segments, tiers, exitCode, errMsg, duration, cwd, retry)
 }

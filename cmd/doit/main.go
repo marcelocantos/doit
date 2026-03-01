@@ -51,16 +51,6 @@ func run() int {
 	defer stop()
 
 	switch os.Args[1] {
-	case "--pipe":
-		pipeArgs := os.Args[2:]
-		retry := false
-		if len(pipeArgs) > 0 && pipeArgs[0] == "--retry" {
-			retry = true
-			pipeArgs = pipeArgs[1:]
-		}
-		return cli.RunPipe(ctx, reg, logger, pipeArgs, os.Stdin, os.Stdout, os.Stderr, retry)
-	case "--retry":
-		return cli.RunDirect(ctx, reg, logger, os.Args[2:], true)
 	case "--list":
 		tierFilter := ""
 		args := os.Args[2:]
@@ -81,7 +71,18 @@ func run() int {
 		fmt.Printf("doit %s\n", version)
 		return 0
 	default:
-		// Everything else is a direct capability invocation.
-		return cli.RunDirect(ctx, reg, logger, os.Args[1:], false)
+		return runCommand(ctx, reg, logger, os.Args[1:])
 	}
+}
+
+// runCommand parses optional --retry flag, then delegates to cli.RunCommand.
+func runCommand(ctx context.Context, reg *cap.Registry, logger *audit.Logger, args []string) int {
+	retry := false
+	if len(args) > 0 && args[0] == "--retry" {
+		retry = true
+		args = args[1:]
+	}
+
+	cwd, _ := os.Getwd()
+	return cli.RunCommand(ctx, reg, logger, args, os.Stdin, os.Stdout, os.Stderr, retry, cwd)
 }

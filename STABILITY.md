@@ -12,8 +12,9 @@ period exists to get these right.
 | Surface | Signature | Stability |
 |---|---|---|
 | Direct execution | `doit <capability> [args...]` | Stable |
-| Pipeline | `doit --pipe [--retry] <args...>` | Stable |
-| Config rule bypass | `doit --retry <cap> [args...]` | Stable |
+| Pipeline | `doit <cmd> ¦ <cmd> ¦ ...` | Stable |
+| Compound command | `doit <cmd> ＆＆ <cmd> ‖ <cmd> ；...` | Stable |
+| Config rule bypass | `doit --retry <cmd> [args...]` | Stable |
 | List capabilities | `doit --list [--tier <tier>]` | Stable |
 | Help | `doit --help [<capability>]` | Stable |
 | Agent guide | `doit --help-agent` | Stable |

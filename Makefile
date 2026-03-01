@@ -28,4 +28,4 @@ install: build
 smoke: build
 	bin/doit --version
 	bin/doit --list
-	echo "hello world" | bin/doit --pipe cat ¦ wc -w
+	echo "hello world" | bin/doit cat ¦ wc -w

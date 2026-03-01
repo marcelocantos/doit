@@ -60,7 +60,7 @@ make            # binary at bin/doit
 3. **Run pipelines** with the `¦` operator:
 
    ```sh
-   doit --pipe grep -r TODO src/ ¦ sort ¦ uniq -c ¦ head -20
+   doit grep -r TODO src/ ¦ sort ¦ uniq -c ¦ head -20
    ```
 
 4. **Check available capabilities** and their tiers:
@@ -80,7 +80,7 @@ doit <capability> [args...]
 ### Pipelines
 
 ```
-doit --pipe <cmd> [args...] ¦ <cmd> [args...] ¦ ...
+doit <cmd> [args...] ¦ <cmd> [args...] ¦ ...
 ```
 
 ### Redirects
@@ -88,7 +88,7 @@ doit --pipe <cmd> [args...] ¦ <cmd> [args...] ¦ ...
 Use `›` to redirect stdout to a file and `‹` to redirect stdin from a file:
 
 ```
-doit --pipe sort ‹ input.txt ¦ uniq -c › results.txt
+doit sort ‹ input.txt ¦ uniq -c › results.txt
 ```
 
 ### Compound commands
@@ -102,7 +102,7 @@ Chain pipelines with conditional operators:
 | `；` | sequential (run next regardless) | `;` |
 
 ```
-doit --pipe make build ＆＆ git add -A ＆＆ git commit -m "build ok"
+doit make build ＆＆ git add -A ＆＆ git commit -m "build ok"
 ```
 
 ### Listing capabilities
