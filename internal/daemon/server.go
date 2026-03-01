@@ -241,6 +241,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 			return
 		}
 		if result != nil && result.Decision == policy.Escalate && result.Level == 3 && s.tokenStore != nil {
+			s.logPolicyDenial(req, result, segments, tiers)
 			// L3 escalation: issue an approval token for human review.
 			token, tokenErr := s.tokenStore.Issue(strings.Join(req.Args, " "), req.Args)
 			if tokenErr != nil {

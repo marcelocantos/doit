@@ -93,6 +93,102 @@ func validateDecision(s string) error {
 	}
 }
 
+// SaveStore writes policy entries to path atomically using a temp file + rename.
+// Parent directories are created if they don't exist.
+func SaveStore(path string, entries []PolicyEntry) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("create policy store dir: %w", err)
+	}
+
+	data, err := yaml.Marshal(storeFile{Entries: entries})
+	if err != nil {
+		return fmt.Errorf("marshal policy store: %w", err)
+	}
+
+	tmp, err := os.CreateTemp(dir, ".learned-policy-*.yaml")
+	if err != nil {
+		return fmt.Errorf("create temp policy file: %w", err)
+	}
+	tmpName := tmp.Name()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("write temp policy file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("close temp policy file: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("rename temp policy file: %w", err)
+	}
+	return nil
+}
+
+// AppendEntries adds newEntries to the store at path, skipping any whose ID
+// already exists. Returns the count of entries actually added.
+func AppendEntries(path string, newEntries []PolicyEntry) (int, error) {
+	existing, err := LoadStore(path)
+	if err != nil {
+		return 0, err
+	}
+
+	seen := make(map[string]bool, len(existing))
+	for _, e := range existing {
+		seen[e.ID] = true
+	}
+
+	var added int
+	for _, e := range newEntries {
+		if !seen[e.ID] {
+			existing = append(existing, e)
+			added++
+		}
+	}
+
+	if err := SaveStore(path, existing); err != nil {
+		return 0, err
+	}
+	return added, nil
+}
+
+// UpdateEntry loads the store, applies fn to the entry with the given id, and
+// saves. Returns an error if the id is not found.
+func UpdateEntry(path string, id string, fn func(*PolicyEntry)) error {
+	entries, err := LoadStore(path)
+	if err != nil {
+		return err
+	}
+
+	for i := range entries {
+		if entries[i].ID == id {
+			fn(&entries[i])
+			return SaveStore(path, entries)
+		}
+	}
+	return fmt.Errorf("policy entry %q: not found", id)
+}
+
+// DeleteEntry removes the entry with the given id from the store. Returns an
+// error if the id is not found.
+func DeleteEntry(path string, id string) error {
+	entries, err := LoadStore(path)
+	if err != nil {
+		return err
+	}
+
+	for i, e := range entries {
+		if e.ID == id {
+			remaining := append(entries[:i:i], entries[i+1:]...)
+			return SaveStore(path, remaining)
+		}
+	}
+	return fmt.Errorf("policy entry %q: not found", id)
+}
+
 // ParseDecision converts a decision string to a Decision enum.
 func ParseDecision(s string) (Decision, error) {
 	switch s {

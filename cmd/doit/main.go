@@ -16,6 +16,7 @@ import (
 	"github.com/marcelocantos/doit/internal/config"
 	"github.com/marcelocantos/doit/internal/daemon"
 	"github.com/marcelocantos/doit/internal/ipc"
+	"github.com/marcelocantos/doit/internal/policy"
 )
 
 var version = "dev"
@@ -74,6 +75,12 @@ func run() int {
 		return cli.RunHelpAgent(reg, os.Stdout)
 	case "--audit":
 		return cli.RunAudit(os.Stdout, cfg.Audit.Path, os.Args[2:])
+	case "--policy":
+		storePath := cfg.Policy.Level2Path
+		if storePath == "" {
+			storePath = policy.DefaultStorePath()
+		}
+		return cli.RunPolicy(os.Stdout, cfg.Audit.Path, storePath, os.Args[2:])
 	case "--version":
 		fmt.Printf("doit %s\n", version)
 		return 0
