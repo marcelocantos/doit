@@ -148,6 +148,210 @@ func TestLoadStoreMalformedYAML(t *testing.T) {
 	}
 }
 
+// makeEntry returns a minimal valid PolicyEntry for use in tests.
+func makeEntry(id, cap string) PolicyEntry {
+	return PolicyEntry{
+		ID:          id,
+		Description: id,
+		Match:       MatchCriteria{Cap: cap},
+		Decision:    "allow",
+		Reasoning:   "test",
+		Confidence:  "high",
+		Provenance:  "human",
+	}
+}
+
+func TestSaveStoreRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "learned-policy.yaml")
+
+	want := []PolicyEntry{
+		makeEntry("e1", "go"),
+		makeEntry("e2", "git"),
+	}
+	if err := SaveStore(path, want); err != nil {
+		t.Fatalf("SaveStore: %v", err)
+	}
+
+	got, err := LoadStore(path)
+	if err != nil {
+		t.Fatalf("LoadStore: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d entries, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].ID != want[i].ID {
+			t.Errorf("entry[%d].ID = %q, want %q", i, got[i].ID, want[i].ID)
+		}
+		if got[i].Match.Cap != want[i].Match.Cap {
+			t.Errorf("entry[%d].Match.Cap = %q, want %q", i, got[i].Match.Cap, want[i].Match.Cap)
+		}
+	}
+}
+
+func TestSaveStoreCreatesDir(t *testing.T) {
+	base := t.TempDir()
+	path := filepath.Join(base, "a", "b", "c", "learned-policy.yaml")
+
+	entries := []PolicyEntry{makeEntry("e1", "go")}
+	if err := SaveStore(path, entries); err != nil {
+		t.Fatalf("SaveStore: %v", err)
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("file not created: %v", err)
+	}
+}
+
+func TestAppendEntriesDedup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "learned-policy.yaml")
+
+	initial := []PolicyEntry{
+		makeEntry("e1", "go"),
+		makeEntry("e2", "git"),
+	}
+	if err := SaveStore(path, initial); err != nil {
+		t.Fatalf("SaveStore: %v", err)
+	}
+
+	// e2 overlaps; e3 and e4 are new.
+	news := []PolicyEntry{
+		makeEntry("e2", "git"),
+		makeEntry("e3", "make"),
+		makeEntry("e4", "go"),
+	}
+	added, err := AppendEntries(path, news)
+	if err != nil {
+		t.Fatalf("AppendEntries: %v", err)
+	}
+	if added != 2 {
+		t.Errorf("added = %d, want 2", added)
+	}
+
+	got, err := LoadStore(path)
+	if err != nil {
+		t.Fatalf("LoadStore: %v", err)
+	}
+	if len(got) != 4 {
+		t.Errorf("total entries = %d, want 4", len(got))
+	}
+}
+
+func TestAppendEntriesToNonexistent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "learned-policy.yaml")
+
+	entries := []PolicyEntry{
+		makeEntry("e1", "go"),
+		makeEntry("e2", "git"),
+	}
+	added, err := AppendEntries(path, entries)
+	if err != nil {
+		t.Fatalf("AppendEntries: %v", err)
+	}
+	if added != 2 {
+		t.Errorf("added = %d, want 2", added)
+	}
+
+	got, err := LoadStore(path)
+	if err != nil {
+		t.Fatalf("LoadStore: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("total entries = %d, want 2", len(got))
+	}
+}
+
+func TestUpdateEntry(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "learned-policy.yaml")
+
+	entries := []PolicyEntry{
+		makeEntry("e1", "go"),
+		makeEntry("e2", "git"),
+	}
+	if err := SaveStore(path, entries); err != nil {
+		t.Fatalf("SaveStore: %v", err)
+	}
+
+	if err := UpdateEntry(path, "e1", func(e *PolicyEntry) {
+		e.Decision = "deny"
+	}); err != nil {
+		t.Fatalf("UpdateEntry: %v", err)
+	}
+
+	got, err := LoadStore(path)
+	if err != nil {
+		t.Fatalf("LoadStore: %v", err)
+	}
+	if got[0].Decision != "deny" {
+		t.Errorf("entry[0].Decision = %q, want deny", got[0].Decision)
+	}
+	// Other entry unchanged.
+	if got[1].Decision != "allow" {
+		t.Errorf("entry[1].Decision = %q, want allow", got[1].Decision)
+	}
+}
+
+func TestUpdateEntryNotFound(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "learned-policy.yaml")
+
+	if err := SaveStore(path, []PolicyEntry{makeEntry("e1", "go")}); err != nil {
+		t.Fatalf("SaveStore: %v", err)
+	}
+
+	err := UpdateEntry(path, "no-such-id", func(e *PolicyEntry) {})
+	if err == nil {
+		t.Fatal("want error for unknown id")
+	}
+}
+
+func TestDeleteEntry(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "learned-policy.yaml")
+
+	entries := []PolicyEntry{
+		makeEntry("e1", "go"),
+		makeEntry("e2", "git"),
+		makeEntry("e3", "make"),
+	}
+	if err := SaveStore(path, entries); err != nil {
+		t.Fatalf("SaveStore: %v", err)
+	}
+
+	if err := DeleteEntry(path, "e2"); err != nil {
+		t.Fatalf("DeleteEntry: %v", err)
+	}
+
+	got, err := LoadStore(path)
+	if err != nil {
+		t.Fatalf("LoadStore: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d entries, want 2", len(got))
+	}
+	if got[0].ID != "e1" || got[1].ID != "e3" {
+		t.Errorf("got IDs %q %q, want e1 e3", got[0].ID, got[1].ID)
+	}
+}
+
+func TestDeleteEntryNotFound(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "learned-policy.yaml")
+
+	if err := SaveStore(path, []PolicyEntry{makeEntry("e1", "go")}); err != nil {
+		t.Fatalf("SaveStore: %v", err)
+	}
+
+	err := DeleteEntry(path, "no-such-id")
+	if err == nil {
+		t.Fatal("want error for unknown id")
+	}
+}
+
 func TestParseDecision(t *testing.T) {
 	tests := []struct {
 		input string
