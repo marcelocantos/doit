@@ -21,12 +21,19 @@
 - [ ] Read-only repo access for the gatekeeper to verify worker claims
   (e.g. "this is a generated directory" → inspect `.gitignore`, build config)
 - [ ] Hardcoded allowlist for gatekeeper-internal operations (bootstrap trust)
+- [ ] Session-scoped gatekeeper agent: worker introduces commencing work,
+  doit spawns a context-aware agent with its own context window to triage
+  requests for that work session. Design questions: does this replace L3 for
+  escalations, sit in front of it (pre-filter with session context), or behind
+  it (post-L3 refinement with work-specific knowledge)?
 
 ## Global vs Repo-Level Policy
 
 - [ ] Per-project config (currently global only)
 - [ ] Repo-level policy that can tighten but not loosen global policy
 - [ ] Auto-discover repo context from project structure, Makefile, `.gitignore`
+- [ ] Audit global and/or project CLAUDE.md to configure workers to interact with doit
+  (e.g. ensure `Bash(doit:*)` permission, verify tool routing instructions)
 
 ## Out-of-Band User Interface
 
