@@ -26,6 +26,23 @@ type PolicyConfig struct {
 	Level1Enabled bool   `yaml:"level1_enabled"`
 	Level2Enabled bool   `yaml:"level2_enabled"`
 	Level2Path    string `yaml:"level2_path,omitempty"`
+	Level3Enabled bool   `yaml:"level3_enabled"`
+	Level3Model   string `yaml:"level3_model,omitempty"`
+	Level3Timeout string `yaml:"level3_timeout,omitempty"`
+}
+
+// DefaultLevel3Timeout is used when no level3_timeout is configured.
+const DefaultLevel3Timeout = 60 * time.Second
+
+// Level3TimeoutDuration parses the configured Level 3 timeout or returns the default.
+func (p *PolicyConfig) Level3TimeoutDuration() time.Duration {
+	if p.Level3Timeout != "" {
+		dur, err := time.ParseDuration(p.Level3Timeout)
+		if err == nil {
+			return dur
+		}
+	}
+	return DefaultLevel3Timeout
 }
 
 // DaemonConfig controls daemon behavior.

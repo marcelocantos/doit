@@ -18,6 +18,7 @@ import (
 	"github.com/marcelocantos/doit/internal/cli"
 	"github.com/marcelocantos/doit/internal/config"
 	"github.com/marcelocantos/doit/internal/ipc"
+	"github.com/marcelocantos/doit/internal/llm"
 	"github.com/marcelocantos/doit/internal/pipeline"
 	"github.com/marcelocantos/doit/internal/policy"
 )
@@ -30,6 +31,8 @@ type Server struct {
 	logger      *audit.Logger
 	policyL1    *policy.Level1
 	policyL2    *policy.Level2
+	policyL3    *policy.Level3
+	tokenStore  *policy.TokenStore
 	idleTimeout time.Duration
 
 	mu        sync.Mutex
@@ -71,12 +74,25 @@ func New(cfg *config.Config, reg *cap.Registry, logger *audit.Logger, idleTimeou
 		}
 	}
 
+	var l3 *policy.Level3
+	var tokenStore *policy.TokenStore
+	if cfg.Policy.Level3Enabled {
+		client := &llm.Client{
+			Model:   cfg.Policy.Level3Model,
+			Timeout: cfg.Policy.Level3TimeoutDuration(),
+		}
+		l3 = policy.NewLevel3(client)
+		tokenStore = policy.NewTokenStore(policy.DefaultTokenTTL)
+	}
+
 	return &Server{
 		cfg:         cfg,
 		reg:         reg,
 		logger:      logger,
 		policyL1:    l1,
 		policyL2:    l2,
+		policyL3:    l3,
+		tokenStore:  tokenStore,
 		idleTimeout: idleTimeout,
 	}
 }
@@ -135,6 +151,22 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	s.mu.Lock()
 	s.idleTimer = time.AfterFunc(s.idleTimeout, idleCancel)
 	s.mu.Unlock()
+
+	// Token purge goroutine: periodically removes expired approval tokens.
+	if s.tokenStore != nil {
+		go func() {
+			ticker := time.NewTicker(1 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-idleCtx.Done():
+					return
+				case <-ticker.C:
+					s.tokenStore.Purge()
+				}
+			}
+		}()
+	}
 
 	// Close the listener when the context is done (idle or parent cancel).
 	go func() {
@@ -197,14 +229,30 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	defer reqCancel()
 
 	// Policy evaluation (before starting any goroutines).
-	if s.policyL1 != nil {
-		result, segments, tiers := s.evaluatePolicy(req)
+	if s.policyL1 != nil || s.tokenStore != nil {
+		result, segments, tiers := s.evaluatePolicy(reqCtx, req)
 		if result != nil && result.Decision == policy.Deny {
 			s.logPolicyDenial(req, result, segments, tiers)
 			ipc.WriteJSON(conn, ipc.TagExit, ipc.ExitResult{
 				Code:       1,
 				Error:      fmt.Sprintf("doit: policy: %s", result.Reason),
 				PolicyDeny: result.RuleID,
+			})
+			return
+		}
+		if result != nil && result.Decision == policy.Escalate && result.Level == 3 && s.tokenStore != nil {
+			// L3 escalation: issue an approval token for human review.
+			token, tokenErr := s.tokenStore.Issue(strings.Join(req.Args, " "), req.Args)
+			if tokenErr != nil {
+				writeExit(conn, 2, fmt.Sprintf("doit: token issue: %v", tokenErr))
+				return
+			}
+			stderrMsg := fmt.Sprintf("doit: policy escalation (Level 3): %s\napproval-token: %s\nTo approve, retry with: doit --approved %s %s\n",
+				result.Reason, token, token, strings.Join(req.Args, " "))
+			ipc.WriteFrame(conn, ipc.TagStderrData, []byte(stderrMsg))
+			ipc.WriteJSON(conn, ipc.TagExit, ipc.ExitResult{
+				Code:           1,
+				PolicyEscalate: token,
 			})
 			return
 		}
@@ -260,9 +308,29 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	ipc.WriteJSON(conn, ipc.TagExit, ipc.ExitResult{Code: exitCode})
 }
 
-// evaluatePolicy parses the command and runs it through the Level 1 policy
-// engine. Returns nil result if parsing fails (fall through to RunCommand).
-func (s *Server) evaluatePolicy(req ipc.Request) (result *policy.Result, segments, tiers []string) {
+// evaluatePolicy parses the command and runs it through the policy chain
+// (L1 → L2 → L3). Returns nil result if parsing fails (fall through to RunCommand).
+// Token validation is checked first when --approved is present.
+func (s *Server) evaluatePolicy(ctx context.Context, req ipc.Request) (result *policy.Result, segments, tiers []string) {
+	// Token validation first: if --approved is present, validate the token.
+	if req.Approved != "" && s.tokenStore != nil {
+		_, err := s.tokenStore.Validate(req.Approved, req.Args)
+		if err != nil {
+			return &policy.Result{
+				Decision: policy.Deny,
+				Level:    3,
+				Reason:   fmt.Sprintf("invalid approval token: %v", err),
+				RuleID:   "approval-token",
+			}, nil, nil
+		}
+		return &policy.Result{
+			Decision: policy.Allow,
+			Level:    3,
+			Reason:   "approved via approval token",
+			RuleID:   "approval-token",
+		}, nil, nil
+	}
+
 	cmd, err := pipeline.ParseCommand(req.Args, s.reg)
 	if err != nil {
 		return nil, nil, nil
@@ -299,9 +367,16 @@ func (s *Server) evaluatePolicy(req ipc.Request) (result *policy.Result, segment
 		SafetyArg:      req.SafetyArg,
 	}
 
-	result = s.policyL1.Evaluate(policyReq)
+	if s.policyL1 != nil {
+		result = s.policyL1.Evaluate(policyReq)
+	} else {
+		result = &policy.Result{Decision: policy.Escalate, Level: 1, Reason: "L1 disabled"}
+	}
 	if result.Decision == policy.Escalate && s.policyL2 != nil {
 		result = s.policyL2.Evaluate(policyReq)
+	}
+	if result.Decision == policy.Escalate && s.policyL3 != nil {
+		result = s.policyL3.Evaluate(ctx, policyReq)
 	}
 	return result, segments, tiers
 }

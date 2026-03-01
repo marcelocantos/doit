@@ -14,12 +14,12 @@ import (
 )
 
 // Relay sends a request to the daemon and relays stdin/stdout/stderr.
-// Returns the daemon's exit code.
+// Returns the daemon's ExitResult.
 func Relay(ctx context.Context, conn net.Conn, req *ipc.Request,
-	stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	stdin io.Reader, stdout, stderr io.Writer) (ipc.ExitResult, error) {
 
 	if err := ipc.WriteJSON(conn, ipc.TagRequest, req); err != nil {
-		return 2, fmt.Errorf("send request: %w", err)
+		return ipc.ExitResult{Code: 2}, fmt.Errorf("send request: %w", err)
 	}
 
 	// Stdin pump goroutine: reads from stdin, sends StdinData frames,
@@ -50,7 +50,7 @@ func Relay(ctx context.Context, conn net.Conn, req *ipc.Request,
 		tag, payload, err := ipc.ReadFrame(conn)
 		if err != nil {
 			wg.Wait()
-			return 2, fmt.Errorf("read daemon frame: %w", err)
+			return ipc.ExitResult{Code: 2}, fmt.Errorf("read daemon frame: %w", err)
 		}
 		switch tag {
 		case ipc.TagStdoutData:
@@ -60,10 +60,10 @@ func Relay(ctx context.Context, conn net.Conn, req *ipc.Request,
 		case ipc.TagExit:
 			if err := json.Unmarshal(payload, &exitResult); err != nil {
 				wg.Wait()
-				return 2, fmt.Errorf("unmarshal exit: %w", err)
+				return ipc.ExitResult{Code: 2}, fmt.Errorf("unmarshal exit: %w", err)
 			}
 			wg.Wait()
-			return exitResult.Code, nil
+			return exitResult, nil
 		}
 	}
 }

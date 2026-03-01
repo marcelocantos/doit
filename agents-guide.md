@@ -80,7 +80,7 @@ The `--retry` flag:
 - Only applies to a single invocation
 - Is recorded in the audit log
 
-### Three types of denials
+### Four types of denials
 
 1. **Tier denied** — The capability's tier (e.g., dangerous) is disabled.
    Do not retry. This cannot be bypassed.
@@ -89,6 +89,38 @@ The `--retry` flag:
 3. **Config rule** — A configurable rule blocks the operation (e.g.,
    `make -j`, `git push --force`, `git checkout .`). Ask the user for
    permission, then retry with `doit --retry <cap> [args...]`.
+4. **Policy escalation** — The LLM gatekeeper couldn't decide and needs
+   human review. The error output includes reasoning and an approval token.
+   Present the reasoning to the user. If they approve, retry with
+   `doit --approved <token> <cap> [args...]`.
+
+## Policy escalation with --approved
+
+When Level 3 (LLM gatekeeper) is enabled and the LLM cannot confidently
+allow or deny a command, it escalates to a human. The stderr output includes:
+- The LLM's reasoning about the command
+- An approval token (hex string)
+- A retry instruction
+
+Present the LLM's reasoning to the user and ask whether to proceed.
+If the user approves, retry the exact same command with the approval token:
+
+    doit --approved <token> <cap> [args...]
+
+Example:
+
+    doit --approved a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4 git push --force origin master
+
+Approval tokens:
+- Are single-use — each token can only be used once
+- Expire after 10 minutes
+- Must match the original command arguments exactly
+- Are validated by the daemon before the command runs
+
+The `--approved` flag:
+- Bypasses all policy levels (L1, L2, L3) for the validated command
+- Only works with a valid, unexpired token for matching arguments
+- Is recorded in the audit log with `policy_level: 3` and `rule_id: approval-token`
 
 ## Audit log
 

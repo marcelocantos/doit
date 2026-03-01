@@ -76,15 +76,15 @@ func TestRelayBasic(t *testing.T) {
 
 	req := &ipc.Request{Args: []string{"echo", "hello", "world"}, Cwd: "/tmp"}
 	var stdout, stderr strings.Builder
-	code, err := Relay(context.Background(), clientConn, req, strings.NewReader(""), &stdout, &stderr)
+	result, err := Relay(context.Background(), clientConn, req, strings.NewReader(""), &stdout, &stderr)
 	clientConn.Close()
 	wg.Wait()
 
 	if err != nil {
 		t.Fatalf("Relay: %v", err)
 	}
-	if code != 0 {
-		t.Errorf("code = %d, want 0", code)
+	if result.Code != 0 {
+		t.Errorf("code = %d, want 0", result.Code)
 	}
 	if got := strings.TrimSpace(stdout.String()); got != "hello world" {
 		t.Errorf("stdout = %q, want %q", got, "hello world")
@@ -105,15 +105,15 @@ func TestRelayWithStdin(t *testing.T) {
 
 	req := &ipc.Request{Args: []string{"upper"}, Cwd: "/tmp"}
 	var stdout, stderr strings.Builder
-	code, err := Relay(context.Background(), clientConn, req, strings.NewReader("hello world"), &stdout, &stderr)
+	result, err := Relay(context.Background(), clientConn, req, strings.NewReader("hello world"), &stdout, &stderr)
 	clientConn.Close()
 	wg.Wait()
 
 	if err != nil {
 		t.Fatalf("Relay: %v", err)
 	}
-	if code != 0 {
-		t.Errorf("code = %d, want 0", code)
+	if result.Code != 0 {
+		t.Errorf("code = %d, want 0", result.Code)
 	}
 	if got := stdout.String(); got != "HELLO WORLD" {
 		t.Errorf("stdout = %q, want %q", got, "HELLO WORLD")
@@ -134,15 +134,15 @@ func TestRelayStderrInterleaved(t *testing.T) {
 
 	req := &ipc.Request{Args: []string{"cmd"}, Cwd: "/tmp"}
 	var stdout, stderr strings.Builder
-	code, err := Relay(context.Background(), clientConn, req, strings.NewReader(""), &stdout, &stderr)
+	result, err := Relay(context.Background(), clientConn, req, strings.NewReader(""), &stdout, &stderr)
 	clientConn.Close()
 	wg.Wait()
 
 	if err != nil {
 		t.Fatalf("Relay: %v", err)
 	}
-	if code != 0 {
-		t.Errorf("code = %d, want 0", code)
+	if result.Code != 0 {
+		t.Errorf("code = %d, want 0", result.Code)
 	}
 	if got := strings.TrimSpace(stdout.String()); got != "output" {
 		t.Errorf("stdout = %q, want %q", got, "output")
@@ -166,15 +166,15 @@ func TestRelayNonZeroExit(t *testing.T) {
 
 	req := &ipc.Request{Args: []string{"fail"}, Cwd: "/tmp"}
 	var stdout, stderr strings.Builder
-	code, err := Relay(context.Background(), clientConn, req, strings.NewReader(""), &stdout, &stderr)
+	result, err := Relay(context.Background(), clientConn, req, strings.NewReader(""), &stdout, &stderr)
 	clientConn.Close()
 	wg.Wait()
 
 	if err != nil {
 		t.Fatalf("Relay: %v", err)
 	}
-	if code != 1 {
-		t.Errorf("code = %d, want 1", code)
+	if result.Code != 1 {
+		t.Errorf("code = %d, want 1", result.Code)
 	}
 }
 
@@ -220,15 +220,15 @@ func TestRelayLargeStdin(t *testing.T) {
 	largeInput := strings.Repeat("x", 256*1024)
 	req := &ipc.Request{Args: []string{"cat"}, Cwd: "/tmp"}
 	var stdout, stderr strings.Builder
-	code, err := Relay(context.Background(), clientConn, req, strings.NewReader(largeInput), &stdout, &stderr)
+	result, err := Relay(context.Background(), clientConn, req, strings.NewReader(largeInput), &stdout, &stderr)
 	clientConn.Close()
 	wg.Wait()
 
 	if err != nil {
 		t.Fatalf("Relay: %v", err)
 	}
-	if code != 0 {
-		t.Errorf("code = %d, want 0", code)
+	if result.Code != 0 {
+		t.Errorf("code = %d, want 0", result.Code)
 	}
 	if got := stdout.String(); got != largeInput {
 		t.Errorf("stdout length = %d, want %d", len(got), len(largeInput))
@@ -252,14 +252,14 @@ func TestRelayEmptyStdin(t *testing.T) {
 
 	req := &ipc.Request{Args: []string{"cmd"}, Cwd: "/tmp"}
 	var stdout, stderr strings.Builder
-	code, err := Relay(context.Background(), clientConn, req, io.LimitReader(strings.NewReader(""), 0), &stdout, &stderr)
+	result, err := Relay(context.Background(), clientConn, req, io.LimitReader(strings.NewReader(""), 0), &stdout, &stderr)
 	clientConn.Close()
 	wg.Wait()
 
 	if err != nil {
 		t.Fatalf("Relay: %v", err)
 	}
-	if code != 0 {
-		t.Errorf("code = %d, want 0; stderr: %s", code, stderr.String())
+	if result.Code != 0 {
+		t.Errorf("code = %d, want 0; stderr: %s", result.Code, stderr.String())
 	}
 }

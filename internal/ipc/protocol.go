@@ -29,13 +29,15 @@ type Request struct {
 	Env           map[string]string `json:"env,omitempty"`
 	Justification string            `json:"justification,omitempty"`
 	SafetyArg     string            `json:"safety_arg,omitempty"`
+	Approved      string            `json:"approved,omitempty"`
 }
 
 // ExitResult is sent by the daemon when command execution completes.
 type ExitResult struct {
-	Code       int    `json:"code"`
-	Error      string `json:"error,omitempty"`
-	PolicyDeny string `json:"policy_deny,omitempty"` // rule ID when denied by policy
+	Code           int    `json:"code"`
+	Error          string `json:"error,omitempty"`
+	PolicyDeny     string `json:"policy_deny,omitempty"`     // rule ID when denied by policy
+	PolicyEscalate string `json:"policy_escalate,omitempty"` // approval token when escalated
 }
 
 // SignalMsg carries a signal name from client to daemon.

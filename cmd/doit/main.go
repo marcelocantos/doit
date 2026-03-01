@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/signal"
 
+	"strings"
+
 	"github.com/marcelocantos/doit/internal/audit"
 	"github.com/marcelocantos/doit/internal/cap"
 	"github.com/marcelocantos/doit/internal/cap/builtin"
@@ -95,9 +97,21 @@ func runDaemon(ctx context.Context, cfg *config.Config, reg *cap.Registry, logge
 // falling back to in-process execution.
 func runCommand(ctx context.Context, cfg *config.Config, reg *cap.Registry, logger *audit.Logger, args []string) int {
 	retry := false
-	if len(args) > 0 && args[0] == "--retry" {
-		retry = true
-		args = args[1:]
+	approved := ""
+	for len(args) > 0 {
+		if args[0] == "--retry" {
+			retry = true
+			args = args[1:]
+		} else if args[0] == "--approved" {
+			if len(args) < 2 {
+				fmt.Fprintf(os.Stderr, "doit: --approved requires a token argument\n")
+				return 1
+			}
+			approved = args[1]
+			args = args[2:]
+		} else {
+			break
+		}
 	}
 
 	cwd, _ := os.Getwd()
@@ -117,17 +131,22 @@ func runCommand(ctx context.Context, cfg *config.Config, reg *cap.Registry, logg
 			defer stopSig()
 
 			req := &ipc.Request{
-				Args:  args,
-				Cwd:   cwd,
-				Retry: retry,
-				Env:   ipc.CaptureEnv(),
+				Args:     args,
+				Cwd:      cwd,
+				Retry:    retry,
+				Approved: approved,
+				Env:      ipc.CaptureEnv(),
 			}
-			code, err := client.Relay(ctx, conn, req, os.Stdin, os.Stdout, os.Stderr)
+			result, err := client.Relay(ctx, conn, req, os.Stdin, os.Stdout, os.Stderr)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "doit: %v\n", err)
 				return 2
 			}
-			return code
+			if result.PolicyEscalate != "" {
+				fmt.Fprintf(os.Stderr, "\ndoit: policy escalation. To approve, retry with:\n  doit --approved %s %s\n",
+					result.PolicyEscalate, strings.Join(args, " "))
+			}
+			return result.Code
 		}
 	}
 
