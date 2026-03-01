@@ -48,8 +48,9 @@ func NewLogger(path string) (*Logger, error) {
 	return l, nil
 }
 
-// Log writes an audit entry to the log file.
-func (l *Logger) Log(pipeline string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, cwd string, retry bool) error {
+// Log writes an audit entry to the log file. If opts is non-nil, policy
+// evaluation metadata is included in the entry.
+func (l *Logger) Log(pipeline string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, cwd string, retry bool, opts *LogOptions) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -66,6 +67,13 @@ func (l *Logger) Log(pipeline string, segments, tiers []string, exitCode int, er
 		Error:    errMsg,
 		Duration: float64(duration.Microseconds()) / 1000.0,
 		Cwd:      cwd,
+	}
+	if opts != nil {
+		entry.PolicyLevel = opts.PolicyLevel
+		entry.PolicyResult = opts.PolicyResult
+		entry.PolicyRuleID = opts.PolicyRuleID
+		entry.Justification = opts.Justification
+		entry.SafetyArg = opts.SafetyArg
 	}
 
 	// Compute hash with Hash field empty.

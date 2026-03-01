@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +17,8 @@ import (
 	"github.com/marcelocantos/doit/internal/cli"
 	"github.com/marcelocantos/doit/internal/config"
 	"github.com/marcelocantos/doit/internal/ipc"
+	"github.com/marcelocantos/doit/internal/pipeline"
+	"github.com/marcelocantos/doit/internal/policy"
 )
 
 // Server is the persistent daemon process that accepts IPC connections
@@ -24,6 +27,7 @@ type Server struct {
 	cfg         *config.Config
 	reg         *cap.Registry
 	logger      *audit.Logger
+	policyL1    *policy.Level1
 	idleTimeout time.Duration
 
 	mu        sync.Mutex
@@ -31,12 +35,22 @@ type Server struct {
 	active    sync.WaitGroup
 }
 
-// New creates a daemon server.
+// New creates a daemon server. If the config has Level1 policy enabled,
+// the deterministic policy engine is created from the config rules.
 func New(cfg *config.Config, reg *cap.Registry, logger *audit.Logger, idleTimeout time.Duration) *Server {
+	var l1 *policy.Level1
+	if cfg.Policy.Level1Enabled {
+		cfgRules := cfg.Rules
+		if cfgRules == nil {
+			cfgRules = config.DefaultRules()
+		}
+		l1 = policy.NewLevel1(cfgRules)
+	}
 	return &Server{
 		cfg:         cfg,
 		reg:         reg,
 		logger:      logger,
+		policyL1:    l1,
 		idleTimeout: idleTimeout,
 	}
 }
@@ -156,6 +170,29 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	reqCtx, reqCancel := context.WithCancel(ctx)
 	defer reqCancel()
 
+	// Policy evaluation (before starting any goroutines).
+	if s.policyL1 != nil {
+		result, segments, tiers := s.evaluatePolicy(req)
+		if result != nil && result.Decision == policy.Deny {
+			s.logPolicyDenial(req, result, segments, tiers)
+			ipc.WriteJSON(conn, ipc.TagExit, ipc.ExitResult{
+				Code:       1,
+				Error:      fmt.Sprintf("doit: policy: %s", result.Reason),
+				PolicyDeny: result.RuleID,
+			})
+			return
+		}
+		if result != nil {
+			reqCtx = policy.NewEvalContext(reqCtx, &policy.EvalInfo{
+				Level:         result.Level,
+				Decision:      result.Decision.String(),
+				RuleID:        result.RuleID,
+				Justification: req.Justification,
+				SafetyArg:     req.SafetyArg,
+			})
+		}
+	}
+
 	// Stdin pipe: demux goroutine writes to it, RunCommand reads from it.
 	stdinR, stdinW := io.Pipe()
 
@@ -195,6 +232,68 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	connMu.Lock()
 	defer connMu.Unlock()
 	ipc.WriteJSON(conn, ipc.TagExit, ipc.ExitResult{Code: exitCode})
+}
+
+// evaluatePolicy parses the command and runs it through the Level 1 policy
+// engine. Returns nil result if parsing fails (fall through to RunCommand).
+func (s *Server) evaluatePolicy(req ipc.Request) (result *policy.Result, segments, tiers []string) {
+	cmd, err := pipeline.ParseCommand(req.Args, s.reg)
+	if err != nil {
+		return nil, nil, nil
+	}
+
+	var policySegs []policy.Segment
+	hasRedirectOut := false
+	for _, step := range cmd.Steps {
+		if step.Pipeline.RedirectOut != "" {
+			hasRedirectOut = true
+		}
+		for _, seg := range step.Pipeline.Segments {
+			tier := cap.TierRead
+			if c, lookupErr := s.reg.Lookup(seg.CapName); lookupErr == nil {
+				tier = c.Tier()
+				tiers = append(tiers, tier.String())
+			}
+			segments = append(segments, seg.CapName)
+			policySegs = append(policySegs, policy.Segment{
+				CapName: seg.CapName,
+				Args:    seg.Args,
+				Tier:    tier,
+			})
+		}
+	}
+
+	policyReq := &policy.Request{
+		Command:        strings.Join(req.Args, " "),
+		Segments:       policySegs,
+		Cwd:            req.Cwd,
+		Retry:          req.Retry,
+		HasRedirectOut: hasRedirectOut,
+		Justification:  req.Justification,
+		SafetyArg:      req.SafetyArg,
+	}
+
+	return s.policyL1.Evaluate(policyReq), segments, tiers
+}
+
+// logPolicyDenial writes an audit entry for a policy denial.
+func (s *Server) logPolicyDenial(req ipc.Request, result *policy.Result, segments, tiers []string) {
+	if s.logger == nil {
+		return
+	}
+	opts := &audit.LogOptions{
+		PolicyLevel:   result.Level,
+		PolicyResult:  result.Decision.String(),
+		PolicyRuleID:  result.RuleID,
+		Justification: req.Justification,
+		SafetyArg:     req.SafetyArg,
+	}
+	_ = s.logger.Log(
+		strings.Join(req.Args, " "),
+		segments, tiers,
+		1, result.Reason,
+		0, req.Cwd, req.Retry, opts,
+	)
 }
 
 func writeExit(conn net.Conn, code int, msg string) {

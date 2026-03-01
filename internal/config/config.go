@@ -18,6 +18,12 @@ type Config struct {
 	Audit  AuditConfig                    `yaml:"audit"`
 	Rules  map[string]rules.CapRuleConfig `yaml:"rules"`
 	Daemon DaemonConfig                   `yaml:"daemon"`
+	Policy PolicyConfig                   `yaml:"policy"`
+}
+
+// PolicyConfig controls the policy engine.
+type PolicyConfig struct {
+	Level1Enabled bool `yaml:"level1_enabled"`
 }
 
 // DaemonConfig controls daemon behavior.
@@ -69,6 +75,9 @@ func DefaultConfig() *Config {
 		Audit: AuditConfig{
 			Path:      filepath.Join(home, ".local", "share", "doit", "audit.jsonl"),
 			MaxSizeMB: 100,
+		},
+		Policy: PolicyConfig{
+			Level1Enabled: true,
 		},
 	}
 }

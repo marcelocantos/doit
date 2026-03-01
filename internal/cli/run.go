@@ -12,6 +12,7 @@ import (
 	"github.com/marcelocantos/doit/internal/cap"
 	"github.com/marcelocantos/doit/internal/cap/builtin"
 	"github.com/marcelocantos/doit/internal/pipeline"
+	"github.com/marcelocantos/doit/internal/policy"
 )
 
 // RunCommand executes a command (single capability, pipeline, or compound).
@@ -60,7 +61,7 @@ func RunCommand(ctx context.Context, reg *cap.Registry, logger *audit.Logger, ar
 		}
 	}
 
-	logAudit(logger, pipelineStr, segments, tiers, exitCode, errMsg, duration, retry, cwd)
+	logAudit(ctx, logger, pipelineStr, segments, tiers, exitCode, errMsg, duration, retry, cwd)
 
 	return exitCode
 }
@@ -81,10 +82,20 @@ func resolveError(err error, stderr io.Writer) (exitCode int, errMsg string) {
 	return 2, err.Error()
 }
 
-func logAudit(logger *audit.Logger, pipelineStr string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, retry bool, cwd string) {
+func logAudit(ctx context.Context, logger *audit.Logger, pipelineStr string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, retry bool, cwd string) {
 	if logger == nil {
 		return
 	}
+	var opts *audit.LogOptions
+	if info := policy.EvalFromContext(ctx); info != nil {
+		opts = &audit.LogOptions{
+			PolicyLevel:   info.Level,
+			PolicyResult:  info.Decision,
+			PolicyRuleID:  info.RuleID,
+			Justification: info.Justification,
+			SafetyArg:     info.SafetyArg,
+		}
+	}
 	// Best-effort audit logging — don't fail the command if audit fails.
-	_ = logger.Log(pipelineStr, segments, tiers, exitCode, errMsg, duration, cwd, retry)
+	_ = logger.Log(pipelineStr, segments, tiers, exitCode, errMsg, duration, cwd, retry, opts)
 }

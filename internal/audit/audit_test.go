@@ -26,6 +26,7 @@ func TestLogAndVerify(t *testing.T) {
 			time.Duration(i)*time.Millisecond,
 			"/tmp",
 			false,
+			nil,
 		)
 		if err != nil {
 			t.Fatalf("log entry %d: %v", i, err)
@@ -48,7 +49,7 @@ func TestVerifyDetectsTampering(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		_ = logger.Log("test", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false)
+		_ = logger.Log("test", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
 	}
 
 	// Tamper with the file: modify a byte in the middle.
@@ -83,7 +84,7 @@ func TestVerifyDetectsSequenceGap(t *testing.T) {
 	}
 
 	for i := 0; i < 5; i++ {
-		_ = logger.Log("test", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false)
+		_ = logger.Log("test", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
 	}
 
 	// Delete the middle line (line 3 of 5).
@@ -130,15 +131,15 @@ func TestLoggerResumesChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = logger1.Log("first", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false)
-	_ = logger1.Log("second", []string{"grep"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false)
+	_ = logger1.Log("first", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
+	_ = logger1.Log("second", []string{"grep"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
 
 	// Create a new logger (simulating process restart).
 	logger2, err := NewLogger(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = logger2.Log("third", []string{"head"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false)
+	_ = logger2.Log("third", []string{"head"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
 
 	// The chain should still be valid.
 	if err := Verify(path); err != nil {

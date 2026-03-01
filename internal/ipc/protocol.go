@@ -23,16 +23,19 @@ const (
 
 // Request is the initial frame sent by the client to the daemon.
 type Request struct {
-	Args  []string          `json:"args"`
-	Cwd   string            `json:"cwd"`
-	Retry bool              `json:"retry,omitempty"`
-	Env   map[string]string `json:"env,omitempty"`
+	Args          []string          `json:"args"`
+	Cwd           string            `json:"cwd"`
+	Retry         bool              `json:"retry,omitempty"`
+	Env           map[string]string `json:"env,omitempty"`
+	Justification string            `json:"justification,omitempty"`
+	SafetyArg     string            `json:"safety_arg,omitempty"`
 }
 
 // ExitResult is sent by the daemon when command execution completes.
 type ExitResult struct {
-	Code  int    `json:"code"`
-	Error string `json:"error,omitempty"`
+	Code       int    `json:"code"`
+	Error      string `json:"error,omitempty"`
+	PolicyDeny string `json:"policy_deny,omitempty"` // rule ID when denied by policy
 }
 
 // SignalMsg carries a signal name from client to daemon.
