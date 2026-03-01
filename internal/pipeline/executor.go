@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/marcelocantos/doit/internal/cap"
@@ -45,9 +46,21 @@ func Execute(ctx context.Context, p *Pipeline, reg *cap.Registry, stdin io.Reade
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// Resolve relative redirect paths against cwd from context.
+	redirectIn := p.RedirectIn
+	redirectOut := p.RedirectOut
+	if cwd := cap.CwdFromContext(ctx); cwd != "" {
+		if redirectIn != "" && !filepath.IsAbs(redirectIn) {
+			redirectIn = filepath.Join(cwd, redirectIn)
+		}
+		if redirectOut != "" && !filepath.IsAbs(redirectOut) {
+			redirectOut = filepath.Join(cwd, redirectOut)
+		}
+	}
+
 	// Handle stdin redirect.
-	if p.RedirectIn != "" {
-		f, err := os.Open(p.RedirectIn)
+	if redirectIn != "" {
+		f, err := os.Open(redirectIn)
 		if err != nil {
 			return err
 		}
@@ -56,8 +69,8 @@ func Execute(ctx context.Context, p *Pipeline, reg *cap.Registry, stdin io.Reade
 	}
 
 	// Handle stdout redirect.
-	if p.RedirectOut != "" {
-		f, err := os.Create(p.RedirectOut)
+	if redirectOut != "" {
+		f, err := os.Create(redirectOut)
 		if err != nil {
 			return err
 		}

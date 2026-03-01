@@ -18,24 +18,24 @@ Examples:
 
 ## Pipelines
 
-Use `--pipe` with the `¦` (U+00A6 BROKEN BAR) operator to chain capabilities.
+Use the `¦` (U+00A6 BROKEN BAR) operator to chain capabilities.
 No quoting is needed — these are not shell metacharacters.
 
-    doit --pipe <cmd> [args...] ¦ <cmd> [args...] ¦ ...
+    doit <cmd> [args...] ¦ <cmd> [args...] ¦ ...
 
 Examples:
 
-    doit --pipe grep -r TODO src/ ¦ head -20
-    doit --pipe git log --oneline ¦ grep fix ¦ head -5
-    doit --pipe cat file.txt ¦ sort ¦ uniq -c
+    doit grep -r TODO src/ ¦ head -20
+    doit git log --oneline ¦ grep fix ¦ head -5
+    doit cat file.txt ¦ sort ¦ uniq -c
 
 ## Redirects
 
 Use `›` (U+203A) to redirect stdout to a file and `‹` (U+2039) to redirect
 stdin from a file. These can appear anywhere in the argument list.
 
-    doit --pipe grep -r TODO src/ ¦ sort › /tmp/results.txt
-    doit --pipe sort ‹ /tmp/input.txt ¦ uniq -c
+    doit grep -r TODO src/ ¦ sort › /tmp/results.txt
+    doit sort ‹ /tmp/input.txt ¦ uniq -c
 
 ## Compound commands
 
@@ -45,15 +45,15 @@ Use compound operators to chain pipelines conditionally:
 - `‖` (or-else): run the next pipeline only if the previous failed
 - `；` (sequential): run the next pipeline regardless of exit code
 
-    doit --pipe make build ＆＆ git add -A
-    doit --pipe make build ‖ cat build-failed.txt
-    doit --pipe git add -A ；git commit -m "auto"
+    doit make build ＆＆ git add -A
+    doit make build ‖ cat build-failed.txt
+    doit git add -A ；git commit -m "auto"
 
 Compound operators chain whole pipelines. Pipes and redirects scope to each
 pipeline section:
 
-    doit --pipe grep TODO src/ ¦ wc -l ＆＆ cat ok.txt
-    doit --pipe sort ‹ input.txt › sorted.txt ＆＆ head -5 ‹ sorted.txt
+    doit grep TODO src/ ¦ wc -l ＆＆ cat ok.txt
+    doit sort ‹ input.txt › sorted.txt ＆＆ head -5 ‹ sorted.txt
 
 ## Safety tiers
 
@@ -73,14 +73,14 @@ with `--retry`. Only do this after the user has explicitly approved the operatio
     doit --retry make -j4 all
     doit --retry git push --force origin master
     doit --retry git checkout .
-    doit --pipe --retry make -j4 ＆＆ git push --force
+    doit --retry make -j4 ＆＆ git push --force
 
 The `--retry` flag:
 - Only bypasses config-based rules, never hardcoded safety rules
 - Only applies to a single invocation
 - Is recorded in the audit log
 
-### Three types of denials
+### Four types of denials
 
 1. **Tier denied** — The capability's tier (e.g., dangerous) is disabled.
    Do not retry. This cannot be bypassed.
@@ -89,6 +89,38 @@ The `--retry` flag:
 3. **Config rule** — A configurable rule blocks the operation (e.g.,
    `make -j`, `git push --force`, `git checkout .`). Ask the user for
    permission, then retry with `doit --retry <cap> [args...]`.
+4. **Policy escalation** — The LLM gatekeeper couldn't decide and needs
+   human review. The error output includes reasoning and an approval token.
+   Present the reasoning to the user. If they approve, retry with
+   `doit --approved <token> <cap> [args...]`.
+
+## Policy escalation with --approved
+
+When Level 3 (LLM gatekeeper) is enabled and the LLM cannot confidently
+allow or deny a command, it escalates to a human. The stderr output includes:
+- The LLM's reasoning about the command
+- An approval token (hex string)
+- A retry instruction
+
+Present the LLM's reasoning to the user and ask whether to proceed.
+If the user approves, retry the exact same command with the approval token:
+
+    doit --approved <token> <cap> [args...]
+
+Example:
+
+    doit --approved a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4 git push --force origin master
+
+Approval tokens:
+- Are single-use — each token can only be used once
+- Expire after 10 minutes
+- Must match the original command arguments exactly
+- Are validated by the daemon before the command runs
+
+The `--approved` flag:
+- Bypasses all policy levels (L1, L2, L3) for the validated command
+- Only works with a valid, unexpired token for matching arguments
+- Is recorded in the audit log with `policy_level: 3` and `rule_id: approval-token`
 
 ## Audit log
 
@@ -101,7 +133,7 @@ to modify or delete the audit log.
 ## Important rules
 
 1. Always use `doit` instead of running commands directly.
-2. Use `doit --pipe` with `¦` for pipelines instead of shell `|`.
+2. Use `¦` for pipelines instead of shell `|`.
 3. Use `›` and `‹` for redirects instead of shell `>` and `<`.
 4. Respect tier denials and hardcoded blocks — do not retry.
    Config rule blocks can be retried with `--retry` after user approval.

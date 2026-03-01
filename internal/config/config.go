@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -13,9 +14,57 @@ import (
 
 // Config holds the global doit configuration.
 type Config struct {
-	Tiers TierConfig                     `yaml:"tiers"`
-	Audit AuditConfig                    `yaml:"audit"`
-	Rules map[string]rules.CapRuleConfig `yaml:"rules"`
+	Tiers  TierConfig                     `yaml:"tiers"`
+	Audit  AuditConfig                    `yaml:"audit"`
+	Rules  map[string]rules.CapRuleConfig `yaml:"rules"`
+	Daemon DaemonConfig                   `yaml:"daemon"`
+	Policy PolicyConfig                   `yaml:"policy"`
+}
+
+// PolicyConfig controls the policy engine.
+type PolicyConfig struct {
+	Level1Enabled bool   `yaml:"level1_enabled"`
+	Level2Enabled bool   `yaml:"level2_enabled"`
+	Level2Path    string `yaml:"level2_path,omitempty"`
+	Level3Enabled bool   `yaml:"level3_enabled"`
+	Level3Model   string `yaml:"level3_model,omitempty"`
+	Level3Timeout string `yaml:"level3_timeout,omitempty"`
+}
+
+// DefaultLevel3Timeout is used when no level3_timeout is configured.
+const DefaultLevel3Timeout = 60 * time.Second
+
+// Level3TimeoutDuration parses the configured Level 3 timeout or returns the default.
+func (p *PolicyConfig) Level3TimeoutDuration() time.Duration {
+	if p.Level3Timeout != "" {
+		dur, err := time.ParseDuration(p.Level3Timeout)
+		if err == nil {
+			return dur
+		}
+	}
+	return DefaultLevel3Timeout
+}
+
+// DaemonConfig controls daemon behavior.
+type DaemonConfig struct {
+	// Enabled: nil = auto (try daemon, fall back to in-process),
+	// true = require daemon, false = always in-process.
+	Enabled     *bool  `yaml:"enabled"`
+	IdleTimeout string `yaml:"idle_timeout"`
+}
+
+// DefaultIdleTimeout is used when no idle_timeout is configured.
+const DefaultIdleTimeout = 5 * time.Minute
+
+// IdleTimeoutDuration parses the configured idle timeout or returns the default.
+func (d *DaemonConfig) IdleTimeoutDuration() time.Duration {
+	if d.IdleTimeout != "" {
+		dur, err := time.ParseDuration(d.IdleTimeout)
+		if err == nil {
+			return dur
+		}
+	}
+	return DefaultIdleTimeout
 }
 
 // TierConfig controls which safety tiers are enabled.
@@ -45,6 +94,10 @@ func DefaultConfig() *Config {
 		Audit: AuditConfig{
 			Path:      filepath.Join(home, ".local", "share", "doit", "audit.jsonl"),
 			MaxSizeMB: 100,
+		},
+		Policy: PolicyConfig{
+			Level1Enabled: true,
+			Level2Enabled: true,
 		},
 	}
 }
