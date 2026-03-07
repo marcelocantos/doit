@@ -2,29 +2,6 @@
 
 ## Active
 
-### 🎯T1 MCP-first architecture
-
-- **Weight**: 5 (value 5 / cost 1)
-- **Status**: converging
-
-doit operates as an MCP server (stdio transport). The CLI shim, daemon IPC,
-and unix socket architecture are replaced by direct MCP tool calls. Worker
-agents interact with doit exclusively through MCP tools (`doit_execute`,
-`doit_dry_run`, `doit_policy_status`, `doit_approve`).
-
-**Acceptance criteria**:
-- `doit-mcp` binary starts an MCP stdio server and serves all four tools.
-- `engine` and `mcptools` packages are importable by external consumers.
-- Integration tests exercise the MCP tool handlers end-to-end.
-- The old daemon/IPC path (`internal/daemon/`, `internal/client/`,
-  `internal/ipc/`) is removable once MCP is the sole entry point.
-
-**Notes**: `engine/` and `mcptools/` packages exist. `cmd/doit-mcp/` binary
-exists. Integration tests are in progress (`mcptools/integration_test.go`
-untracked). The old daemon/client/IPC code is still present.
-
----
-
 ### 🎯T2 sh -c execution model
 
 - **Weight**: 4 (value 4 / cost 1)
@@ -118,4 +95,11 @@ for policy segment extraction only).
 
 ## Achieved
 
-(none yet)
+### 🎯T1 MCP-first architecture
+
+- **Weight**: 5 (value 5 / cost 1)
+- **Status**: achieved
+
+All four MCP tools registered and tested. `engine/` and `mcptools/` packages
+importable. `cmd/doit-mcp/` binary exists. 9 integration tests passing.
+Legacy daemon/IPC removal gated by 🎯T6.

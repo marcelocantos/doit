@@ -1,40 +1,41 @@
 # Convergence Report
 
-Generated: 2026-03-06
+Generated: 2026-03-07
 Branch: master
-SHA: 1ce61f6
+SHA: d8b6948
 
-## Standing invariants
+## Standing invariants: all green
 
-- Tests: PASSING (`go test ./...` — all green)
-- CI: not checked (no open PRs)
+## Movement
+
+- 🎯T1: close → **achieved** (integration tests committed, all passing)
+- 🎯T2: (unchanged)
+- 🎯T5: (unchanged)
+- 🎯T3: (unchanged)
+- 🎯T4: (unchanged)
+- 🎯T6: (unchanged)
 
 ## Gap Report
 
 ### 🎯T1 MCP-first architecture  [high, effective 6.0]
-Gap: **close**
+Gap: **achieved**
 
-Most acceptance criteria are met: `engine/` and `mcptools/` packages exist
-and are importable, `cmd/doit-mcp/main.go` binary exists, all four MCP tools
-are registered. Integration tests exist but are untracked
-(`mcptools/integration_test.go`). The old daemon/client/IPC code is still
-present but can be removed once MCP is sole entry point (gated by 🎯T6).
-Remaining work: commit the integration test file.
+All acceptance criteria met: `doit-mcp` binary, importable `engine`/`mcptools`
+packages, 9 integration tests committed and passing. Legacy code removal
+deferred to 🎯T6.
 
 ### 🎯T2 sh -c execution model  [high, effective 5.0]
 Gap: **significant**
 
-`engine.Execute` currently delegates to the pipeline parser for execution.
-No `sh -c` code path exists yet. The `Request.Command` field is split via
-`strings.Fields` — it doesn't go through `sh -c`. All execution still flows
-through `pipeline.ExecuteCommand` with per-capability `Run()` methods.
+No `sh -c` code path exists. All execution flows through `pipeline.ExecuteCommand`
+with per-capability `Run()` methods. `Request.Command` is split via
+`strings.Fields`, not passed to a shell.
 
 ### 🎯T5 Test coverage for core packages  [medium, effective 3.0]
 Gap: **significant**
 
 6 packages have no test files: `cmd/doit`, `cmd/doit-mcp`, `internal/cap`,
-`internal/cap/builtin`, `internal/cli`, `internal/config`. The packages that
-do have tests pass.
+`internal/cap/builtin`, `internal/cli`, `internal/config`.
 
 ### 🎯T4 Per-project policy  [medium, effective 2.0]  (status only)
 Status: not started
@@ -48,28 +49,29 @@ Blocked by: 🎯T1, 🎯T2
 
 ## Recommendation
 
-Work on: **🎯T1 MCP-first architecture**
+Work on: **🎯T2 sh -c execution model**
 
-Reason: Highest effective weight (6.0), already close to achieved, and
-unblocks 🎯T6. The integration test file just needs to be committed, and
-the daemon testdata needs to be tracked or gitignored.
+Reason: Highest effective weight among unachieved targets (5.0), unblocks
+🎯T6. This is the architectural shift that lets doit receive opaque command
+strings and delegate shell composition to the shell.
 
 ## Suggested action
 
-Commit the untracked files (`internal/daemon/testdata/` and
-`mcptools/integration_test.go`), then verify the integration tests pass
-with `go test ./mcptools/ -run TestIntegration -v`. If everything passes,
-🎯T1 moves to achieved.
+Add an `sh -c` execution path in `engine.Execute`: when `Request.Command`
+is set and `Request.Args` is empty, execute via `exec.Command("sh", "-c", req.Command)`
+instead of going through the pipeline parser. Propagate exit codes from the
+child process. Keep the pipeline parser path for policy evaluation (segment
+extraction) but bypass it for execution.
 
 Type **go** to execute the suggested action.
 
 <!-- convergence-deps
-evaluated: 2026-03-06T00:00:00Z
-sha: 1ce61f6
+evaluated: 2026-03-07T00:00:00Z
+sha: d8b6948
 
 🎯T1:
-  gap: close
-  assessment: "Engine, mcptools, and doit-mcp binary exist. Integration tests untracked but written. Old daemon/client/IPC still present."
+  gap: achieved
+  assessment: "All criteria met. Integration tests committed and passing."
   read:
     - engine/engine.go
     - mcptools/mcptools.go

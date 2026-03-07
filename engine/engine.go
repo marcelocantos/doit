@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -483,7 +485,58 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 	return result, segments, tiers
 }
 
+// useShellExec returns true when the request should be executed via sh -c
+// rather than through the pipeline parser. This is the case when the caller
+// provided a raw Command string (not pre-parsed Args).
+func (req *Request) useShellExec() bool {
+	return len(req.Args) == 0 && req.Command != ""
+}
+
 func (e *Engine) runCommand(ctx context.Context, args []string, req Request, stdout, stderr io.Writer) int {
+	if req.useShellExec() {
+		return e.runShellCommand(ctx, req, stdout, stderr)
+	}
+	return e.runPipelineCommand(ctx, args, req, stdout, stderr)
+}
+
+// runShellCommand executes a command via sh -c, propagating exit codes.
+func (e *Engine) runShellCommand(ctx context.Context, req Request, stdout, stderr io.Writer) int {
+	cmd := exec.CommandContext(ctx, "sh", "-c", req.Command)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if req.Cwd != "" {
+		cmd.Dir = req.Cwd
+	}
+	if req.Env != nil {
+		cmd.Env = os.Environ()
+		for k, v := range req.Env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+	}
+
+	start := time.Now()
+	err := cmd.Run()
+	duration := time.Since(start)
+
+	exitCode := 0
+	errMsg := ""
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = 2
+			errMsg = err.Error()
+			fmt.Fprintf(stderr, "doit: %v\n", err)
+		}
+	}
+
+	e.logExecution(ctx, req.Command, nil, nil, exitCode, errMsg, duration, req)
+	return exitCode
+}
+
+// runPipelineCommand executes through the legacy pipeline parser.
+func (e *Engine) runPipelineCommand(ctx context.Context, args []string, req Request, stdout, stderr io.Writer) int {
 	ctx = cap.NewContext(ctx, e.reg)
 	if req.Cwd != "" {
 		ctx = cap.NewCwdContext(ctx, req.Cwd)
@@ -513,8 +566,6 @@ func (e *Engine) runCommand(ctx context.Context, args []string, req Request, std
 		exitCode, errMsg = resolveExitError(err, stderr)
 	}
 
-	// Audit log.
-	pipelineStr := strings.Join(args, " ")
 	var segments, tiers []string
 	for _, step := range cmd.Steps {
 		for _, seg := range step.Pipeline.Segments {
@@ -524,21 +575,25 @@ func (e *Engine) runCommand(ctx context.Context, args []string, req Request, std
 			}
 		}
 	}
-	if e.logger != nil {
-		var opts *audit.LogOptions
-		if info := policy.EvalFromContext(ctx); info != nil {
-			opts = &audit.LogOptions{
-				PolicyLevel:   info.Level,
-				PolicyResult:  info.Decision,
-				PolicyRuleID:  info.RuleID,
-				Justification: info.Justification,
-				SafetyArg:     info.SafetyArg,
-			}
-		}
-		_ = e.logger.Log(pipelineStr, segments, tiers, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
-	}
-
+	e.logExecution(ctx, strings.Join(args, " "), segments, tiers, exitCode, errMsg, duration, req)
 	return exitCode
+}
+
+func (e *Engine) logExecution(ctx context.Context, cmdStr string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, req Request) {
+	if e.logger == nil {
+		return
+	}
+	var opts *audit.LogOptions
+	if info := policy.EvalFromContext(ctx); info != nil {
+		opts = &audit.LogOptions{
+			PolicyLevel:   info.Level,
+			PolicyResult:  info.Decision,
+			PolicyRuleID:  info.RuleID,
+			Justification: info.Justification,
+			SafetyArg:     info.SafetyArg,
+		}
+	}
+	_ = e.logger.Log(cmdStr, segments, tiers, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
 }
 
 func resolveExitError(err error, stderr io.Writer) (int, string) {
