@@ -183,6 +183,57 @@ func TestExecuteStreaming(t *testing.T) {
 	}
 }
 
+func TestNew_ProjectConfig(t *testing.T) {
+	// Global config: dangerous enabled, no extra rules.
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	auditPath := filepath.Join(dir, "audit.jsonl")
+	os.WriteFile(cfgPath, []byte(
+		"tiers:\n  read: true\n  build: true\n  write: true\n  dangerous: true\n"+
+			"audit:\n  path: "+auditPath+"\n"+
+			"policy:\n  level1_enabled: true\n  level2_enabled: false\n  level3_enabled: false\n",
+	), 0600)
+
+	// Project config: disable dangerous tier, add npm rule.
+	projDir := filepath.Join(dir, "project")
+	doitDir := filepath.Join(projDir, ".doit")
+	os.MkdirAll(doitDir, 0755)
+	os.WriteFile(filepath.Join(doitDir, "config.yaml"), []byte(
+		"tiers:\n  dangerous: false\nrules:\n  npm:\n    reject_flags: [\"--unsafe-perm\"]\n",
+	), 0644)
+
+	eng, err := New(Options{ConfigPath: cfgPath, ProjectRoot: projDir})
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	// Dangerous tier should be disabled by project config.
+	if eng.cfg.Tiers.Dangerous {
+		t.Error("expected dangerous tier disabled by project config")
+	}
+
+	// npm rule should be present from project config.
+	if _, ok := eng.cfg.Rules["npm"]; !ok {
+		t.Error("expected npm rule from project config")
+	}
+
+	// Global default rules should still be present.
+	if _, ok := eng.cfg.Rules["make"]; !ok {
+		t.Error("expected make rule preserved from global defaults")
+	}
+}
+
+func TestNew_ProjectConfigMissing(t *testing.T) {
+	// ProjectRoot with no .doit/config.yaml should work fine.
+	eng, err := New(Options{ProjectRoot: t.TempDir()})
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+	if eng == nil {
+		t.Fatal("expected non-nil engine")
+	}
+}
+
 func newTestEngine(t *testing.T) *Engine {
 	t.Helper()
 	dir := t.TempDir()

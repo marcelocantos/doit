@@ -186,3 +186,97 @@ func ConfigPath() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".config", "doit", "config.yaml")
 }
+
+// ProjectConfigPath returns the config file path for a project root.
+func ProjectConfigPath(projectRoot string) string {
+	return filepath.Join(projectRoot, ".doit", "config.yaml")
+}
+
+// LoadProject loads a project-level config from the given project root.
+// Returns nil (not an error) if no .doit/config.yaml exists.
+func LoadProject(projectRoot string) (*Config, error) {
+	path := ProjectConfigPath(projectRoot)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read project config: %w", err)
+	}
+
+	cfg := &Config{}
+	if err := yaml.Unmarshal(data, cfg); err != nil {
+		return nil, fmt.Errorf("parse project config %s: %w", path, err)
+	}
+	return cfg, nil
+}
+
+// MergeProject overlays project config onto the global config using
+// tighten-only semantics: the project can add rules and disable tiers
+// but cannot remove global rules or enable globally-disabled tiers.
+func (c *Config) MergeProject(proj *Config) {
+	if proj == nil {
+		return
+	}
+
+	// Tiers: project can only disable (tighten), never enable.
+	if c.Tiers.Read && !proj.Tiers.Read {
+		c.Tiers.Read = false
+	}
+	if c.Tiers.Build && !proj.Tiers.Build {
+		c.Tiers.Build = false
+	}
+	if c.Tiers.Write && !proj.Tiers.Write {
+		c.Tiers.Write = false
+	}
+	if c.Tiers.Dangerous && !proj.Tiers.Dangerous {
+		c.Tiers.Dangerous = false
+	}
+
+	// Rules: merge project rules into global. Project rules add to
+	// (never replace) global rules.
+	if len(proj.Rules) > 0 {
+		if c.Rules == nil {
+			c.Rules = DefaultRules()
+		}
+		for name, projRule := range proj.Rules {
+			existing, ok := c.Rules[name]
+			if !ok {
+				c.Rules[name] = projRule
+				continue
+			}
+			// Merge reject flags (deduplicated).
+			existing.RejectFlags = mergeFlags(existing.RejectFlags, projRule.RejectFlags)
+			// Merge subcommand rules.
+			if len(projRule.Subcommands) > 0 {
+				if existing.Subcommands == nil {
+					existing.Subcommands = make(map[string]rules.SubRuleConfig)
+				}
+				for sub, subRule := range projRule.Subcommands {
+					if es, ok := existing.Subcommands[sub]; ok {
+						es.RejectFlags = mergeFlags(es.RejectFlags, subRule.RejectFlags)
+						existing.Subcommands[sub] = es
+					} else {
+						existing.Subcommands[sub] = subRule
+					}
+				}
+			}
+			c.Rules[name] = existing
+		}
+	}
+}
+
+// mergeFlags appends new flags to existing, skipping duplicates.
+func mergeFlags(existing, new []string) []string {
+	seen := make(map[string]bool, len(existing))
+	for _, f := range existing {
+		seen[f] = true
+	}
+	for _, f := range new {
+		if !seen[f] {
+			existing = append(existing, f)
+			seen[f] = true
+		}
+	}
+	return existing
+}

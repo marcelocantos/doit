@@ -463,3 +463,185 @@ func TestApplyRules(t *testing.T) {
 		}
 	})
 }
+
+func TestProjectConfigPath(t *testing.T) {
+	got := ProjectConfigPath("/home/user/myproject")
+	want := filepath.Join("/home/user/myproject", ".doit", "config.yaml")
+	if got != want {
+		t.Errorf("ProjectConfigPath = %q, want %q", got, want)
+	}
+}
+
+func TestLoadProjectMissing(t *testing.T) {
+	cfg, err := LoadProject(t.TempDir())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg != nil {
+		t.Error("expected nil config for missing project config")
+	}
+}
+
+func TestLoadProjectValid(t *testing.T) {
+	dir := t.TempDir()
+	doitDir := filepath.Join(dir, ".doit")
+	if err := os.MkdirAll(doitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	yaml := `
+tiers:
+  dangerous: false
+rules:
+  npm:
+    reject_flags: ["--unsafe-perm"]
+`
+	if err := os.WriteFile(filepath.Join(doitDir, "config.yaml"), []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadProject(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("expected non-nil config")
+	}
+	if cfg.Tiers.Dangerous {
+		t.Error("expected Dangerous=false in project config")
+	}
+	if _, ok := cfg.Rules["npm"]; !ok {
+		t.Error("expected npm rule in project config")
+	}
+}
+
+func TestLoadProjectInvalidYAML(t *testing.T) {
+	dir := t.TempDir()
+	doitDir := filepath.Join(dir, ".doit")
+	if err := os.MkdirAll(doitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(doitDir, "config.yaml"), []byte(":::bad"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadProject(dir)
+	if err == nil {
+		t.Error("expected error for invalid YAML")
+	}
+}
+
+func TestMergeProjectNil(t *testing.T) {
+	cfg := DefaultConfig()
+	original := *cfg
+	cfg.MergeProject(nil)
+	if cfg.Tiers != original.Tiers {
+		t.Error("MergeProject(nil) should not change tiers")
+	}
+}
+
+func TestMergeProjectTightenOnly(t *testing.T) {
+	t.Run("project disables tier", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Tiers.Write = true
+		proj := &Config{Tiers: TierConfig{Read: true, Build: true, Write: false, Dangerous: false}}
+		cfg.MergeProject(proj)
+		if cfg.Tiers.Write {
+			t.Error("expected Write disabled after project merge")
+		}
+	})
+
+	t.Run("project cannot enable globally disabled tier", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Tiers.Dangerous = false
+		proj := &Config{Tiers: TierConfig{Read: true, Build: true, Write: true, Dangerous: true}}
+		cfg.MergeProject(proj)
+		if cfg.Tiers.Dangerous {
+			t.Error("project should not be able to enable globally disabled Dangerous tier")
+		}
+	})
+}
+
+func TestMergeProjectRules(t *testing.T) {
+	t.Run("adds new capability rule", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Rules = map[string]rules.CapRuleConfig{
+			"make": {RejectFlags: []string{"-j"}},
+		}
+		proj := &Config{
+			Rules: map[string]rules.CapRuleConfig{
+				"npm": {RejectFlags: []string{"--unsafe-perm"}},
+			},
+		}
+		cfg.MergeProject(proj)
+		if _, ok := cfg.Rules["npm"]; !ok {
+			t.Error("expected npm rule after merge")
+		}
+		if _, ok := cfg.Rules["make"]; !ok {
+			t.Error("expected make rule preserved after merge")
+		}
+	})
+
+	t.Run("merges flags into existing capability", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Rules = map[string]rules.CapRuleConfig{
+			"git": {
+				Subcommands: map[string]rules.SubRuleConfig{
+					"push": {RejectFlags: []string{"--force"}},
+				},
+			},
+		}
+		proj := &Config{
+			Rules: map[string]rules.CapRuleConfig{
+				"git": {
+					Subcommands: map[string]rules.SubRuleConfig{
+						"push":  {RejectFlags: []string{"--no-verify"}},
+						"clean": {RejectFlags: []string{"-f"}},
+					},
+				},
+			},
+		}
+		cfg.MergeProject(proj)
+		gitRule := cfg.Rules["git"]
+		pushFlags := gitRule.Subcommands["push"].RejectFlags
+		if len(pushFlags) != 2 {
+			t.Errorf("expected 2 push flags, got %d: %v", len(pushFlags), pushFlags)
+		}
+		if _, ok := gitRule.Subcommands["clean"]; !ok {
+			t.Error("expected clean subcommand rule after merge")
+		}
+	})
+
+	t.Run("deduplicates flags", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Rules = map[string]rules.CapRuleConfig{
+			"make": {RejectFlags: []string{"-j"}},
+		}
+		proj := &Config{
+			Rules: map[string]rules.CapRuleConfig{
+				"make": {RejectFlags: []string{"-j", "-B"}},
+			},
+		}
+		cfg.MergeProject(proj)
+		flags := cfg.Rules["make"].RejectFlags
+		if len(flags) != 2 {
+			t.Errorf("expected 2 flags (deduplicated), got %d: %v", len(flags), flags)
+		}
+	})
+
+	t.Run("project rules with nil global rules uses defaults", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Rules = nil
+		proj := &Config{
+			Rules: map[string]rules.CapRuleConfig{
+				"npm": {RejectFlags: []string{"--unsafe-perm"}},
+			},
+		}
+		cfg.MergeProject(proj)
+		if _, ok := cfg.Rules["make"]; !ok {
+			t.Error("expected default make rule when global rules were nil")
+		}
+		if _, ok := cfg.Rules["npm"]; !ok {
+			t.Error("expected npm rule from project")
+		}
+	})
+}
