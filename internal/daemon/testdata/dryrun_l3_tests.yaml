@@ -1,0 +1,67 @@
+# Server fixture: capabilities and rules for L3 dry-run tests.
+# Same capabilities/rules as dryrun_tests.yaml — L3 is injected via WithLevel3.
+capabilities:
+  - name: echo
+    tier: read
+  - name: upper
+    tier: read
+  - name: deploy
+    tier: write
+  - name: noisy
+    tier: read
+
+rules:
+  noisy:
+    reject_flags: ["--force"]
+
+# Test cases.
+tests:
+  - name: L3 allows write command
+    args: [deploy, prod]
+    l3_response: '{"decision":"allow","reasoning":"deployment looks safe"}'
+    expect:
+      segments: [deploy]
+      tiers: [write]
+      decision: allow
+      level: 3
+      rule: llm-gatekeeper
+      reason_contains: deployment looks safe
+
+  - name: L3 denies write command
+    args: [deploy, prod]
+    l3_response: '{"decision":"deny","reasoning":"too risky"}'
+    expect:
+      segments: [deploy]
+      tiers: [write]
+      decision: deny
+      level: 3
+      rule: llm-gatekeeper
+      reason_contains: too risky
+
+  - name: L3 escalates write command
+    args: [deploy, prod]
+    l3_response: '{"decision":"escalate","reasoning":"need human review"}'
+    expect:
+      segments: [deploy]
+      tiers: [write]
+      decision: escalate
+      level: 3
+      reason_contains: need human review
+
+  - name: L1 allow still short-circuits
+    args: [echo, hello]
+    expect:
+      segments: [echo]
+      tiers: [read]
+      decision: allow
+      level: 1
+      rule: allow-safe-pipeline
+
+  - name: L1 deny still short-circuits
+    args: [noisy, --force]
+    expect:
+      segments: [noisy]
+      tiers: [read]
+      decision: deny
+      level: 1
+      rule: deny-noisy-flags

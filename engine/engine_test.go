@@ -73,6 +73,80 @@ func TestExecute_SimpleCommand(t *testing.T) {
 	}
 }
 
+func TestExecute_ShellExec(t *testing.T) {
+	eng := newTestEngine(t)
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "hello.txt"), []byte("shell exec works\n"), 0644)
+
+	result := eng.Execute(context.Background(), Request{
+		Command: "cat hello.txt",
+		Cwd:     dir,
+	})
+	if result.ExitCode != 0 {
+		t.Errorf("expected exit code 0, got %d; stderr: %s", result.ExitCode, result.Stderr)
+	}
+	if !strings.Contains(result.Stdout, "shell exec works") {
+		t.Errorf("expected 'shell exec works' in stdout, got: %q", result.Stdout)
+	}
+}
+
+func TestExecute_ShellExec_Pipeline(t *testing.T) {
+	eng := newTestEngine(t)
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "data.txt"), []byte("alpha\nbeta\ngamma\n"), 0644)
+
+	// Shell pipeline — this only works via sh -c, not the pipeline parser.
+	result := eng.Execute(context.Background(), Request{
+		Command: "cat data.txt | grep beta",
+		Cwd:     dir,
+	})
+	if result.ExitCode != 0 {
+		t.Errorf("expected exit code 0, got %d; stderr: %s", result.ExitCode, result.Stderr)
+	}
+	if strings.TrimSpace(result.Stdout) != "beta" {
+		t.Errorf("expected 'beta', got: %q", result.Stdout)
+	}
+}
+
+func TestExecute_ShellExec_ExitCode(t *testing.T) {
+	eng := newTestEngine(t)
+
+	result := eng.Execute(context.Background(), Request{
+		Command: "exit 42",
+	})
+	if result.ExitCode != 42 {
+		t.Errorf("expected exit code 42, got %d", result.ExitCode)
+	}
+}
+
+func TestExecute_ShellExec_Env(t *testing.T) {
+	eng := newTestEngine(t)
+
+	result := eng.Execute(context.Background(), Request{
+		Command: "echo $DOIT_TEST_VAR",
+		Env:     map[string]string{"DOIT_TEST_VAR": "hello_doit"},
+	})
+	if result.ExitCode != 0 {
+		t.Errorf("expected exit code 0, got %d; stderr: %s", result.ExitCode, result.Stderr)
+	}
+	if strings.TrimSpace(result.Stdout) != "hello_doit" {
+		t.Errorf("expected 'hello_doit', got: %q", result.Stdout)
+	}
+}
+
+func TestExecute_ArgsUsePipeline(t *testing.T) {
+	eng := newTestEngine(t)
+
+	// When Args is set, should use pipeline parser (legacy path), not sh -c.
+	result := eng.Execute(context.Background(), Request{
+		Args: []string{"cat"},
+		Cwd:  t.TempDir(),
+	})
+	if result.ExitCode != 0 {
+		t.Errorf("expected exit code 0 via pipeline path, got %d; stderr: %s", result.ExitCode, result.Stderr)
+	}
+}
+
 func TestExecute_PolicyDeny(t *testing.T) {
 	eng := newTestEngine(t)
 
