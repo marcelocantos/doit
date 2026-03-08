@@ -2,82 +2,75 @@
 
 Generated: 2026-03-08
 Branch: master
-SHA: 13efbe1
+SHA: e8c76a0
 
 ## Standing invariants: all green
 
-All tests pass (including 4 new test files).
+All tests pass. No CI configured.
 
 ## Movement
 
-- 🎯T2: significant → **achieved** (sh -c execution path merged in PR #5)
-- 🎯T5: significant → **close** (4/5 acceptance criteria met — cap, builtin, cli, config all tested)
-- 🎯T6: blocked → **unblocked** (both T1, T2 achieved)
+- 🎯T5: close → **achieved** (cmd/doit smoke tests added, PR #6 merged)
 - 🎯T3: (unchanged)
 - 🎯T4: (unchanged)
+- 🎯T6: (unchanged)
 
 ## Gap Report
 
-### 🎯T5 Test coverage for core packages  [effective 3.0]
-Gap: **close**
-4 of 5 acceptance criteria met. `internal/cap/`, `internal/cap/builtin/`,
-`internal/cli/`, and `internal/config/` all have comprehensive tests.
-Remaining: `cmd/doit/` smoke tests (entry-point binary, tightly coupled
-to OS state). `cmd/doit-mcp/` is exercised by MCP integration tests.
-
 ### 🎯T4 Per-project policy  [effective 2.0]
 Gap: **not started**
-No per-project config support exists.
+No per-project config support. No code references to project root or repo-level
+config. Acceptance criteria: `.doit/config.yaml` in repo, tighten-only
+semantics, `engine.New` accepts project root.
 
 ### 🎯T3 Starlark L1 rules  [effective 1.5]
 Gap: **not started**
-No Starlark integration exists.
+No Starlark integration in code. Only referenced in design docs and TODO.
+Large scope: embed interpreter, rule loading, test validation, L3→L1
+promotion, migrate existing Go rules.
 
 ### 🎯T6 Clean up legacy code paths  [effective 1.0]
 Gap: **significant**
-Now unblocked. `internal/daemon/`, `internal/client/`, `internal/ipc/`,
-unicode operators, and pipeline execution code still present.
+Unblocked. ~1685 lines across `internal/daemon/`, `internal/client/`,
+`internal/ipc/` plus unicode operators and pipeline execution code.
+Straightforward deletion with test fixup.
 
 ## Recommendation
 
-Work on: **🎯T5 Test coverage for core packages**
+Work on: **🎯T4 Per-project policy**
 
-Reason: Gap is "close" — one remaining criterion (`cmd/doit/` smoke tests).
-Closing this target is cheap and enables confident refactoring for 🎯T6.
+Reason: Highest effective weight (2.0) among active targets. Relatively
+low cost (cost 1) — config layering with tighten-only semantics. Enables
+repo-specific gatekeeper behaviour without modifying global policy.
 
 ## Suggested action
 
-Add a smoke test for `cmd/doit/` — test the `run()` function with
-`--version` and `--help` args to verify subcommand dispatch without
-requiring daemon/network dependencies.
+Add per-project config support to `engine.New`: accept an optional project
+root path, look for `.doit/config.yaml` in that directory, merge it with
+global config using tighten-only semantics (repo config can add rules and
+restrict tiers but cannot remove global rules or enable disabled tiers).
+Start by reading `internal/config/config.go` and `engine/engine.go` to
+understand the current config flow, then extend `Options` with a
+`ProjectRoot` field.
 
 Type **go** to execute the suggested action.
 
 <!-- convergence-deps
-evaluated: 2026-03-08T00:00:00Z
-sha: 13efbe1
-
-🎯T5:
-  gap: close
-  assessment: "4/5 criteria met. cap, builtin, cli, config tested. Remaining: cmd/doit smoke tests."
-  read:
-    - internal/cap/capability_test.go
-    - internal/cap/builtin/builtin_test.go
-    - internal/cli/cli_test.go
-    - internal/config/config_test.go
+evaluated: 2026-03-08T01:00:00Z
+sha: e8c76a0
 
 🎯T4:
   gap: not started
-  assessment: "No per-project config support."
+  assessment: "No per-project config support in code."
   read: []
 
 🎯T3:
   gap: not started
-  assessment: "No Starlark integration."
+  assessment: "No Starlark integration in code."
   read: []
 
 🎯T6:
   gap: significant
-  assessment: "Unblocked. Legacy code still present."
+  assessment: "Unblocked. ~1685 lines of legacy code to remove."
   read: []
 -->
