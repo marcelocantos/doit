@@ -1,93 +1,70 @@
 # Convergence Report
 
-Generated: 2026-03-07
+Generated: 2026-03-08
 Branch: master
-SHA: d8b6948
+SHA: 13efbe1
 
 ## Standing invariants: all green
 
+All tests pass (including 4 new test files).
+
 ## Movement
 
-- 🎯T1: close → **achieved** (integration tests committed, all passing)
-- 🎯T2: (unchanged)
-- 🎯T5: (unchanged)
+- 🎯T2: significant → **achieved** (sh -c execution path merged in PR #5)
+- 🎯T5: significant → **close** (4/5 acceptance criteria met — cap, builtin, cli, config all tested)
+- 🎯T6: blocked → **unblocked** (both T1, T2 achieved)
 - 🎯T3: (unchanged)
 - 🎯T4: (unchanged)
-- 🎯T6: (unchanged)
 
 ## Gap Report
 
-### 🎯T1 MCP-first architecture  [high, effective 6.0]
-Gap: **achieved**
+### 🎯T5 Test coverage for core packages  [effective 3.0]
+Gap: **close**
+4 of 5 acceptance criteria met. `internal/cap/`, `internal/cap/builtin/`,
+`internal/cli/`, and `internal/config/` all have comprehensive tests.
+Remaining: `cmd/doit/` smoke tests (entry-point binary, tightly coupled
+to OS state). `cmd/doit-mcp/` is exercised by MCP integration tests.
 
-All acceptance criteria met: `doit-mcp` binary, importable `engine`/`mcptools`
-packages, 9 integration tests committed and passing. Legacy code removal
-deferred to 🎯T6.
+### 🎯T4 Per-project policy  [effective 2.0]
+Gap: **not started**
+No per-project config support exists.
 
-### 🎯T2 sh -c execution model  [high, effective 5.0]
+### 🎯T3 Starlark L1 rules  [effective 1.5]
+Gap: **not started**
+No Starlark integration exists.
+
+### 🎯T6 Clean up legacy code paths  [effective 1.0]
 Gap: **significant**
-
-No `sh -c` code path exists. All execution flows through `pipeline.ExecuteCommand`
-with per-capability `Run()` methods. `Request.Command` is split via
-`strings.Fields`, not passed to a shell.
-
-### 🎯T5 Test coverage for core packages  [medium, effective 3.0]
-Gap: **significant**
-
-6 packages have no test files: `cmd/doit`, `cmd/doit-mcp`, `internal/cap`,
-`internal/cap/builtin`, `internal/cli`, `internal/config`.
-
-### 🎯T4 Per-project policy  [medium, effective 2.0]  (status only)
-Status: not started
-
-### 🎯T3 Starlark L1 rules  [medium, effective 1.5]  (status only)
-Status: not started
-
-### 🎯T6 Clean up legacy code paths  [low, effective 1.0]  (blocked)
-Status: not started
-Blocked by: 🎯T1, 🎯T2
+Now unblocked. `internal/daemon/`, `internal/client/`, `internal/ipc/`,
+unicode operators, and pipeline execution code still present.
 
 ## Recommendation
 
-Work on: **🎯T2 sh -c execution model**
+Work on: **🎯T5 Test coverage for core packages**
 
-Reason: Highest effective weight among unachieved targets (5.0), unblocks
-🎯T6. This is the architectural shift that lets doit receive opaque command
-strings and delegate shell composition to the shell.
+Reason: Gap is "close" — one remaining criterion (`cmd/doit/` smoke tests).
+Closing this target is cheap and enables confident refactoring for 🎯T6.
 
 ## Suggested action
 
-Add an `sh -c` execution path in `engine.Execute`: when `Request.Command`
-is set and `Request.Args` is empty, execute via `exec.Command("sh", "-c", req.Command)`
-instead of going through the pipeline parser. Propagate exit codes from the
-child process. Keep the pipeline parser path for policy evaluation (segment
-extraction) but bypass it for execution.
+Add a smoke test for `cmd/doit/` — test the `run()` function with
+`--version` and `--help` args to verify subcommand dispatch without
+requiring daemon/network dependencies.
 
 Type **go** to execute the suggested action.
 
 <!-- convergence-deps
-evaluated: 2026-03-07T00:00:00Z
-sha: d8b6948
-
-🎯T1:
-  gap: achieved
-  assessment: "All criteria met. Integration tests committed and passing."
-  read:
-    - engine/engine.go
-    - mcptools/mcptools.go
-    - mcptools/integration_test.go
-    - cmd/doit-mcp/main.go
-
-🎯T2:
-  gap: significant
-  assessment: "No sh -c execution path. All execution via pipeline parser."
-  read:
-    - engine/engine.go
+evaluated: 2026-03-08T00:00:00Z
+sha: 13efbe1
 
 🎯T5:
-  gap: significant
-  assessment: "6 packages lack test files."
-  read: []
+  gap: close
+  assessment: "4/5 criteria met. cap, builtin, cli, config tested. Remaining: cmd/doit smoke tests."
+  read:
+    - internal/cap/capability_test.go
+    - internal/cap/builtin/builtin_test.go
+    - internal/cli/cli_test.go
+    - internal/config/config_test.go
 
 🎯T4:
   gap: not started
@@ -100,10 +77,7 @@ sha: d8b6948
   read: []
 
 🎯T6:
-  gap: not started
-  assessment: "Blocked by T1 and T2. Legacy code still present."
-  read:
-    - internal/daemon/server.go
-    - internal/client/client.go
-    - internal/ipc/protocol.go
+  gap: significant
+  assessment: "Unblocked. Legacy code still present."
+  read: []
 -->
