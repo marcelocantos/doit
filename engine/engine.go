@@ -32,6 +32,10 @@ import (
 type Options struct {
 	// ConfigPath loads config from a specific file. Empty uses the default.
 	ConfigPath string
+	// ProjectRoot enables per-project config overlay. If set, the engine
+	// looks for .doit/config.yaml in this directory and merges it with
+	// the global config using tighten-only semantics.
+	ProjectRoot string
 }
 
 // Request describes a command to evaluate or execute.
@@ -110,6 +114,15 @@ func New(opts Options, engineOpts ...EngineOption) (*Engine, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
+	}
+
+	// Per-project config overlay (tighten-only).
+	if opts.ProjectRoot != "" {
+		projCfg, err := config.LoadProject(opts.ProjectRoot)
+		if err != nil {
+			return nil, fmt.Errorf("load project config: %w", err)
+		}
+		cfg.MergeProject(projCfg)
 	}
 
 	reg := cap.NewRegistry()

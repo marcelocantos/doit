@@ -20,22 +20,6 @@ Each rule has a pattern, decision, justification, and test suite.
 
 ---
 
-### 🎯T4 Per-project policy
-
-- **Weight**: 2 (value 2 / cost 1)
-- **Status**: not started
-
-Policy exists at both global and repo-level scopes. Repo policy can tighten
-but not loosen global policy. The gatekeeper discovers repo context from
-project structure.
-
-**Acceptance criteria**:
-- Config supports per-project overrides (e.g. `.doit/config.yaml` in repo root).
-- Repo config can add rules and tighten tiers but cannot remove global rules.
-- `engine.New` accepts a project root path for repo-level config discovery.
-
----
-
 ### 🎯T6 Clean up legacy code paths
 
 - **Weight**: 1 (value 1 / cost 1)
@@ -82,3 +66,12 @@ All 5 acceptance criteria met. `internal/cap/`, `internal/cap/builtin/`,
 `internal/cli/`, `internal/config/` have comprehensive tests. `cmd/doit/`
 has subprocess-based smoke tests. `cmd/doit-mcp/` exercised via MCP
 integration tests in `mcptools/integration_test.go`.
+
+### 🎯T4 Per-project policy
+
+- **Weight**: 2 (value 2 / cost 1)
+- **Status**: achieved
+
+`.doit/config.yaml` in project root, tighten-only merge semantics.
+`LoadProject()`, `MergeProject()`, `Options.ProjectRoot` in `engine.New()`.
+Comprehensive tests for merge semantics, flag dedup, and edge cases.
