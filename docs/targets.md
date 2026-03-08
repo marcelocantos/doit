@@ -2,25 +2,6 @@
 
 ## Active
 
-### 🎯T2 sh -c execution model
-
-- **Weight**: 4 (value 4 / cost 1)
-- **Status**: identified
-
-Commands are executed via `sh -c` instead of the per-capability pipeline
-parser. doit receives opaque command strings and delegates shell composition
-to the shell. The pipeline parser (`internal/pipeline/`), unicode operators,
-and per-capability `Run()` methods are no longer needed for execution.
-
-**Acceptance criteria**:
-- `engine.Execute` can run commands via `sh -c` when given a `Command` string.
-- Pipeline parser is used only for policy evaluation (segment extraction),
-  not execution.
-- Unicode operators are not required for command submission.
-- Exit codes are faithfully propagated from `sh -c`.
-
----
-
 ### 🎯T3 Starlark L1 rules
 
 - **Weight**: 3 (value 3 / cost 2)
@@ -55,32 +36,10 @@ project structure.
 
 ---
 
-### 🎯T5 Test coverage for core packages
-
-- **Weight**: 3 (value 3 / cost 1)
-- **Status**: converging
-
-All core packages have meaningful test coverage. Packages without test files
-are covered.
-
-**Acceptance criteria**:
-- `internal/cap/` has tests for Registry, Tier, and context helpers.
-- `internal/cap/builtin/` has tests for capability registration and tier mapping.
-- `internal/cli/` has tests for subcommand dispatch.
-- `internal/config/` has tests for YAML loading, defaults, and rule application.
-- `cmd/doit/` has at least smoke tests.
-
-**Notes**: Several packages show `[no test files]` in `go test ./...` output:
-`cmd/doit`, `cmd/doit-mcp`, `internal/cap`, `internal/cap/builtin`,
-`internal/cli`, `internal/config`.
-
----
-
 ### 🎯T6 Clean up legacy code paths
 
 - **Weight**: 1 (value 1 / cost 1)
 - **Status**: not started
-- **Depends on**: 🎯T1, 🎯T2
 
 Once MCP is the sole entry point and sh -c is the execution model, remove
 the legacy code: `internal/daemon/`, `internal/client/`, `internal/ipc/`,
@@ -103,3 +62,23 @@ for policy segment extraction only).
 All four MCP tools registered and tested. `engine/` and `mcptools/` packages
 importable. `cmd/doit-mcp/` binary exists. 9 integration tests passing.
 Legacy daemon/IPC removal gated by 🎯T6.
+
+### 🎯T2 sh -c execution model
+
+- **Weight**: 4 (value 4 / cost 1)
+- **Status**: achieved
+
+`engine.Execute` dispatches via `sh -c` when `Request.Command` is set and
+`Request.Args` is empty. Pipeline parser retained for policy evaluation only.
+Exit codes faithfully propagated. 6 engine tests covering shell execution.
+Merged in PR #5 (`a7c0506`).
+
+### 🎯T5 Test coverage for core packages
+
+- **Weight**: 3 (value 3 / cost 1)
+- **Status**: achieved
+
+All 5 acceptance criteria met. `internal/cap/`, `internal/cap/builtin/`,
+`internal/cli/`, `internal/config/` have comprehensive tests. `cmd/doit/`
+has subprocess-based smoke tests. `cmd/doit-mcp/` exercised via MCP
+integration tests in `mcptools/integration_test.go`.
