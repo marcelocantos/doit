@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -15,9 +17,10 @@ import (
 	"github.com/marcelocantos/doit/internal/policy"
 )
 
-// RunCommand executes a command (single capability, pipeline, or compound).
-// All invocations go through ParseCommand, which handles the degenerate
-// single-segment case. When retry is true, config rules are bypassed.
+// RunCommand executes a command via sh -c after parsing and validating it.
+// ParseCommand + ValidateCommand are used for policy evaluation and capability
+// checking. Execution is delegated to sh -c. When retry is true, config rules
+// are bypassed.
 func RunCommand(ctx context.Context, reg *cap.Registry, logger *audit.Logger, args []string, stdin io.Reader, stdout, stderr io.Writer, retry bool, cwd string, env map[string]string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "doit: missing command")
@@ -35,19 +38,12 @@ func RunCommand(ctx context.Context, reg *cap.Registry, logger *audit.Logger, ar
 		return 1
 	}
 
-	ctx = cap.NewContext(ctx, reg)
 	if cwd != "" {
 		ctx = cap.NewCwdContext(ctx, cwd)
 	}
 	if env != nil {
 		ctx = cap.NewEnvContext(ctx, env)
 	}
-
-	start := time.Now()
-	err = pipeline.ExecuteCommand(ctx, cmd, reg, stdin, stdout, stderr)
-	duration := time.Since(start)
-
-	exitCode, errMsg := resolveError(err, stderr)
 
 	// Build audit info from all segments.
 	pipelineStr := strings.Join(args, " ")
@@ -61,9 +57,46 @@ func RunCommand(ctx context.Context, reg *cap.Registry, logger *audit.Logger, ar
 		}
 	}
 
+	start := time.Now()
+	exitCode, errMsg := runShell(ctx, pipelineStr, stdin, stdout, stderr, cwd, env)
+	duration := time.Since(start)
+
 	logAudit(ctx, logger, pipelineStr, segments, tiers, exitCode, errMsg, duration, retry, cwd)
 
 	return exitCode
+}
+
+// runShell executes a command string via sh -c.
+func runShell(ctx context.Context, command string, stdin io.Reader, stdout, stderr io.Writer, cwd string, env map[string]string) (exitCode int, errMsg string) {
+	c := exec.CommandContext(ctx, "sh", "-c", command)
+	c.Stdin = stdin
+	c.Stdout = stdout
+	c.Stderr = stderr
+	if cwd != "" {
+		c.Dir = cwd
+	}
+	if env != nil {
+		extra := make([]string, 0, len(env))
+		for k, v := range env {
+			extra = append(extra, k+"="+v)
+		}
+		c.Env = append(os.Environ(), extra...)
+	}
+
+	err := c.Run()
+	if err == nil {
+		return 0, ""
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode(), ""
+	}
+	var doitExitErr *builtin.ExitError
+	if errors.As(err, &doitExitErr) {
+		return doitExitErr.Code, ""
+	}
+	fmt.Fprintf(stderr, "doit: %v\n", err)
+	return 2, err.Error()
 }
 
 // resolveError extracts an exit code from an error. For ExitError (command

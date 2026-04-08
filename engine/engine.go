@@ -512,23 +512,19 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 	return result, segments, tiers
 }
 
-// useShellExec returns true when the request should be executed via sh -c
-// rather than through the pipeline parser. This is the case when the caller
-// provided a raw Command string (not pre-parsed Args).
-func (req *Request) useShellExec() bool {
-	return len(req.Args) == 0 && req.Command != ""
-}
-
 func (e *Engine) runCommand(ctx context.Context, args []string, req Request, stdout, stderr io.Writer) int {
-	if req.useShellExec() {
-		return e.runShellCommand(ctx, req, stdout, stderr)
-	}
-	return e.runPipelineCommand(ctx, args, req, stdout, stderr)
+	return e.runShellCommand(ctx, args, req, stdout, stderr)
 }
 
 // runShellCommand executes a command via sh -c, propagating exit codes.
-func (e *Engine) runShellCommand(ctx context.Context, req Request, stdout, stderr io.Writer) int {
-	cmd := exec.CommandContext(ctx, "sh", "-c", req.Command)
+// When args is non-empty, they are joined to form the command string.
+func (e *Engine) runShellCommand(ctx context.Context, args []string, req Request, stdout, stderr io.Writer) int {
+	cmdStr := req.Command
+	if len(args) > 0 {
+		cmdStr = strings.Join(args, " ")
+	}
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if req.Cwd != "" {
@@ -558,51 +554,7 @@ func (e *Engine) runShellCommand(ctx context.Context, req Request, stdout, stder
 		}
 	}
 
-	e.logExecution(ctx, req.Command, nil, nil, exitCode, errMsg, duration, req)
-	return exitCode
-}
-
-// runPipelineCommand executes through the legacy pipeline parser.
-func (e *Engine) runPipelineCommand(ctx context.Context, args []string, req Request, stdout, stderr io.Writer) int {
-	ctx = cap.NewContext(ctx, e.reg)
-	if req.Cwd != "" {
-		ctx = cap.NewCwdContext(ctx, req.Cwd)
-	}
-	if req.Env != nil {
-		ctx = cap.NewEnvContext(ctx, req.Env)
-	}
-
-	cmd, err := pipeline.ParseCommand(args, e.reg)
-	if err != nil {
-		fmt.Fprintf(stderr, "doit: %v\n", err)
-		return 1
-	}
-
-	if err := pipeline.ValidateCommand(cmd, e.reg, req.Retry); err != nil {
-		fmt.Fprintf(stderr, "doit: %v\n", err)
-		return 1
-	}
-
-	start := time.Now()
-	err = pipeline.ExecuteCommand(ctx, cmd, e.reg, strings.NewReader(""), stdout, stderr)
-	duration := time.Since(start)
-
-	exitCode := 0
-	errMsg := ""
-	if err != nil {
-		exitCode, errMsg = resolveExitError(err, stderr)
-	}
-
-	var segments, tiers []string
-	for _, step := range cmd.Steps {
-		for _, seg := range step.Pipeline.Segments {
-			segments = append(segments, seg.CapName)
-			if c, lookupErr := e.reg.Lookup(seg.CapName); lookupErr == nil {
-				tiers = append(tiers, c.Tier().String())
-			}
-		}
-	}
-	e.logExecution(ctx, strings.Join(args, " "), segments, tiers, exitCode, errMsg, duration, req)
+	e.logExecution(ctx, cmdStr, nil, nil, exitCode, errMsg, duration, req)
 	return exitCode
 }
 
@@ -621,15 +573,6 @@ func (e *Engine) logExecution(ctx context.Context, cmdStr string, segments, tier
 		}
 	}
 	_ = e.logger.Log(cmdStr, segments, tiers, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
-}
-
-func resolveExitError(err error, stderr io.Writer) (int, string) {
-	var exitErr *builtin.ExitError
-	if errors.As(err, &exitErr) {
-		return exitErr.Code, ""
-	}
-	fmt.Fprintf(stderr, "doit: %v\n", err)
-	return 2, err.Error()
 }
 
 func (e *Engine) logPolicyResult(req Request, args []string, result *policy.Result, segments, tiers []string, exitCode int) {
