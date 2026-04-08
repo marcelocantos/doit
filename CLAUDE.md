@@ -18,21 +18,19 @@ Never pass `-j` to make — the Makefile sets `MAKEFLAGS` internally.
 ## Architecture
 
 ```
-cmd/doit/main.go          entry point, --prefixed subcommand dispatch
-cmd/doit-mcp/main.go      MCP server entry point (stdio transport)
+cmd/doit/main.go          MCP server entry point (stdio transport)
 engine/                   public API: policy chain, MCP-facing execution
 mcptools/                 MCP tool registration and integration tests
 internal/cap/             Capability interface, Tier enum, Registry
 internal/cap/builtin/     one file per capability, register.go has RegisterAll()
-internal/pipeline/        two-level parser (Command → Pipeline → Segment), executor
+internal/pipeline/        parser (Command → Pipeline → Segment) for policy evaluation
 internal/audit/           hash-chained append-only JSON lines log
 internal/config/          YAML config loader (~/.config/doit/config.yaml, per-project policy)
-internal/cli/             subcommand handlers (run, list, audit, help)
 internal/rules/           hardcoded + config-driven argument validation
 internal/starlark/        Starlark rule loader, evaluator, and generator
 internal/policy/          three-level policy engine (L1/L2/L3)
 internal/llm/             LLM client for L3 policy evaluation
-agents-guide.md           agent usage guide (source of truth, copied to internal/cli/ at build)
+agents-guide.md           agent usage guide
 ```
 
 ## Key design decisions
@@ -41,23 +39,10 @@ agents-guide.md           agent usage guide (source of truth, copied to internal
 - **Three-level policy engine**: L1 (deterministic Starlark rules) → L2 (learned patterns) → L3 (live LLM). L3 can promote decisions to L1 by generating Starlark code for human review.
 - **Starlark for L1 rules**: sandboxed, deterministic, Python-like (LLMs write it well), Go-embeddable. Lives in `internal/starlark/`.
 - **Per-project policy config**: projects can override global policy via a local config file (checked into VCS).
-- **`--` prefix** for doit's own subcommands (`--list`, `--help`, etc.) so no capability names are reserved.
 - **Safety tiers**: read < build < write < dangerous. Each capability has a fixed tier. Git uses per-subcommand tiers at runtime (`internal/cap/builtin/git.go`).
 - **Rules**: hardcoded (permanent, e.g. `rm -rf /`) vs config (bypassable with `--retry`). Wired through `Registry.CheckRules()`.
 - **Audit log**: SHA-256 hash chain with sequence numbers and genesis hash.
 - **Seamless exit codes**: `ExitError` in `builtin/external.go` propagates exit codes without extra stderr noise.
-
-## Type hierarchy (pipeline parser, legacy CLI path)
-
-```
-Command → []CommandStep (connected by ＆＆/‖/；)
-  CommandStep → Pipeline + Operator
-    Pipeline → []Segment + RedirectIn/RedirectOut (connected by ¦)
-      Segment → CapName + Args
-```
-
-`ParseCommand` splits on compound operators first, delegates to `Parse` per section.
-`ExecuteCommand` runs pipelines sequentially with operator-based flow control.
 
 ## Adding a capability
 
@@ -70,7 +55,3 @@ Command → []CommandStep (connected by ＆＆/‖/；)
 
 Open work items are tracked in `docs/todo.md`.
 
-## Generated files
-
-`internal/cli/help_agent.md` is generated from `agents-guide.md` during build.
-It is gitignored — do not edit it directly.

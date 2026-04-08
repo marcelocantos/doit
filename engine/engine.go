@@ -408,6 +408,32 @@ func (e *Engine) PolicyStatus() map[string]any {
 	return status
 }
 
+// CapabilityInfo describes a registered capability.
+type CapabilityInfo struct {
+	Name        string
+	Tier        string
+	Description string
+}
+
+// ListCapabilities returns all registered capabilities.
+func (e *Engine) ListCapabilities() []CapabilityInfo {
+	caps := e.reg.All()
+	result := make([]CapabilityInfo, len(caps))
+	for i, c := range caps {
+		result[i] = CapabilityInfo{
+			Name:        c.Name(),
+			Tier:        c.Tier().String(),
+			Description: c.Description(),
+		}
+	}
+	return result
+}
+
+// AuditPath returns the configured audit log path.
+func (e *Engine) AuditPath() string {
+	return e.cfg.Audit.Path
+}
+
 // ValidateApproval checks an approval token. Returns nil on success.
 func (e *Engine) ValidateApproval(token string, args []string) error {
 	if e.tokenStore == nil {

@@ -1,6 +1,9 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+// doit is an MCP server that exposes doit's policy engine as MCP tools
+// over stdio. Register it in ~/.claude.json (or equivalent) to use doit
+// as the execution broker for Claude Code.
 package main
 
 import (
@@ -9,12 +12,10 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/marcelocantos/doit/internal/audit"
-	"github.com/marcelocantos/doit/internal/cap"
-	"github.com/marcelocantos/doit/internal/cap/builtin"
-	"github.com/marcelocantos/doit/internal/cli"
-	"github.com/marcelocantos/doit/internal/config"
-	"github.com/marcelocantos/doit/internal/policy"
+	"github.com/mark3labs/mcp-go/server"
+
+	"github.com/marcelocantos/doit/engine"
+	"github.com/marcelocantos/doit/mcptools"
 )
 
 var version = "dev"
@@ -24,79 +25,47 @@ func main() {
 }
 
 func run() int {
-	if len(os.Args) < 2 {
-		cli.RunHelp(nil, os.Stderr, nil)
+	var configPath string
+	args := os.Args[1:]
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--config":
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "doit: --config requires a path argument\n")
+				return 1
+			}
+			configPath = args[i+1]
+			i++
+		case "--version":
+			fmt.Printf("doit %s\n", version)
+			return 0
+		case "--help":
+			fmt.Fprintf(os.Stderr, "Usage: doit [--config <path>] [--version] [--help]\n\n")
+			fmt.Fprintf(os.Stderr, "MCP server for doit's policy engine (stdio transport).\n")
+			return 0
+		default:
+			fmt.Fprintf(os.Stderr, "doit: unknown flag %q\n", args[i])
+			return 1
+		}
+	}
+
+	eng, err := engine.New(engine.Options{ConfigPath: configPath})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "doit: %v\n", err)
 		return 1
 	}
 
-	// Load config.
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "doit: config: %v\n", err)
-		return 1
-	}
+	srv := server.NewMCPServer("doit", version, server.WithElicitation())
+	mcptools.Register(srv, eng)
 
-	// Set up registry.
-	reg := cap.NewRegistry()
-	builtin.RegisterAll(reg)
-	cfg.ApplyTiers(reg)
-	cfg.ApplyRules(reg)
-
-	// Set up audit logger.
-	logger, err := audit.NewLogger(cfg.Audit.Path, int64(cfg.Audit.MaxSizeMB)*1024*1024)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "doit: audit: %v\n", err)
-		// Continue without audit logging.
-		logger = nil
-	}
-
-	// Set up context with cancellation on interrupt.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	switch os.Args[1] {
-	case "--list":
-		tierFilter := ""
-		args := os.Args[2:]
-		for i := 0; i < len(args); i++ {
-			if args[i] == "--tier" && i+1 < len(args) {
-				tierFilter = args[i+1]
-				i++
-			}
-		}
-		return cli.RunList(reg, os.Stdout, tierFilter)
-	case "--help":
-		return cli.RunHelp(reg, os.Stdout, os.Args[2:])
-	case "--help-agent":
-		return cli.RunHelpAgent(reg, os.Stdout)
-	case "--audit":
-		return cli.RunAudit(os.Stdout, cfg.Audit.Path, os.Args[2:])
-	case "--policy":
-		storePath := cfg.Policy.Level2Path
-		if storePath == "" {
-			storePath = policy.DefaultStorePath()
-		}
-		return cli.RunPolicy(os.Stdout, cfg.Audit.Path, storePath, os.Args[2:])
-	case "--version":
-		fmt.Printf("doit %s\n", version)
-		return 0
-	default:
-		return runCommand(ctx, reg, logger, os.Args[1:])
-	}
-}
-
-// runCommand executes a command in-process.
-func runCommand(ctx context.Context, reg *cap.Registry, logger *audit.Logger, args []string) int {
-	retry := false
-	for len(args) > 0 {
-		if args[0] == "--retry" {
-			retry = true
-			args = args[1:]
-		} else {
-			break
-		}
+	stdio := server.NewStdioServer(srv)
+	if err := stdio.Listen(ctx, os.Stdin, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "doit: %v\n", err)
+		return 1
 	}
 
-	cwd, _ := os.Getwd()
-	return cli.RunCommand(ctx, reg, logger, args, os.Stdin, os.Stdout, os.Stderr, retry, cwd, nil)
+	return 0
 }

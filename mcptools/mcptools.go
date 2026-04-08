@@ -16,9 +16,10 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/marcelocantos/doit/engine"
+	"github.com/marcelocantos/doit/internal/audit"
 )
 
-// Register adds the four doit MCP tools to the given server.
+// Register adds doit's MCP tools to the given server.
 func Register(srv *server.MCPServer, eng *engine.Engine) {
 	srv.AddTool(
 		mcp.NewTool("doit_execute",
@@ -62,6 +63,32 @@ func Register(srv *server.MCPServer, eng *engine.Engine) {
 			mcp.WithString("command", mcp.Required(), mcp.Description("The original command (must match exactly)")),
 		),
 		handleApprove(eng),
+	)
+
+	// Admin tools.
+	srv.AddTool(
+		mcp.NewTool("doit_list_capabilities",
+			mcp.WithDescription("List all registered capabilities with their safety tiers. "+
+				"Optionally filter by tier (read, build, write, dangerous)."),
+			mcp.WithString("tier", mcp.Description("Filter by tier: read, build, write, or dangerous")),
+		),
+		handleListCapabilities(eng),
+	)
+
+	srv.AddTool(
+		mcp.NewTool("doit_audit_verify",
+			mcp.WithDescription("Verify the audit log hash chain integrity. "+
+				"Returns OK if the chain is valid, or describes the first violation found."),
+		),
+		handleAuditVerify(eng),
+	)
+
+	srv.AddTool(
+		mcp.NewTool("doit_audit_tail",
+			mcp.WithDescription("Show the most recent audit log entries."),
+			mcp.WithNumber("count", mcp.Description("Number of entries to show (default 20)")),
+		),
+		handleAuditTail(eng),
 	)
 }
 
@@ -175,6 +202,55 @@ func handleApprove(eng *engine.Engine) server.ToolHandlerFunc {
 		}
 
 		return mcp.NewToolResultText("Approval token validated. Command is now authorized."), nil
+	}
+}
+
+func handleListCapabilities(eng *engine.Engine) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		tierFilter := argString(req.GetArguments(), "tier")
+		caps := eng.ListCapabilities()
+
+		var b strings.Builder
+		for _, c := range caps {
+			if tierFilter != "" && c.Tier != tierFilter {
+				continue
+			}
+			fmt.Fprintf(&b, "%-12s %-10s %s\n", c.Name, c.Tier, c.Description)
+		}
+		if b.Len() == 0 {
+			if tierFilter != "" {
+				return mcp.NewToolResultText(fmt.Sprintf("No capabilities with tier %q", tierFilter)), nil
+			}
+			return mcp.NewToolResultText("No capabilities registered"), nil
+		}
+		return mcp.NewToolResultText(b.String()), nil
+	}
+}
+
+func handleAuditVerify(eng *engine.Engine) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if err := audit.Verify(eng.AuditPath()); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Audit chain violation: %v", err)), nil
+		}
+		return mcp.NewToolResultText("Audit log integrity verified — hash chain is valid."), nil
+	}
+}
+
+func handleAuditTail(eng *engine.Engine) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		count := 20
+		if n, ok := req.GetArguments()["count"].(float64); ok && n > 0 {
+			count = int(n)
+		}
+		entries, err := audit.Tail(eng.AuditPath(), count)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to read audit log: %v", err)), nil
+		}
+		if len(entries) == 0 {
+			return mcp.NewToolResultText("No audit entries."), nil
+		}
+		data, _ := json.MarshalIndent(entries, "", "  ")
+		return mcp.NewToolResultText(string(data)), nil
 	}
 }
 
