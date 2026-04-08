@@ -131,7 +131,7 @@ func New(opts Options, engineOpts ...EngineOption) (*Engine, error) {
 	cfg.ApplyTiers(reg)
 	cfg.ApplyRules(reg)
 
-	logger, err := audit.NewLogger(cfg.Audit.Path)
+	logger, err := audit.NewLogger(cfg.Audit.Path, int64(cfg.Audit.MaxSizeMB)*1024*1024)
 	if err != nil {
 		log.Printf("doit: engine: audit logger: %v (continuing without audit)", err)
 		logger = nil

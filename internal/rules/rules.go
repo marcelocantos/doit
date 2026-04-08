@@ -43,13 +43,13 @@ func (rs *RuleSet) Check(capName string, args []string, retry bool) error {
 	return nil
 }
 
-// hasAnyFlag checks whether any element in args matches one of the given flags.
+// HasAnyFlag checks whether any element in args matches one of the given flags.
 // It handles:
 //   - Exact match: "-f" matches "-f"
 //   - Combined short flags: "-rf" matches "-r" and "-f"
 //   - Short flag with value: "-j4" matches "-j"
 //   - Long flag with =: "--flag=value" matches "--flag"
-func hasAnyFlag(args []string, flags ...string) bool {
+func HasAnyFlag(args []string, flags ...string) bool {
 	for _, arg := range args {
 		if arg == "" || arg[0] != '-' {
 			continue

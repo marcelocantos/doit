@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -12,25 +13,34 @@ import (
 
 const genesisInput = "doit-genesis"
 
+// sizeCheckInterval is how often (in writes) we check whether the log has
+// exceeded MaxSizeBytes.
+const sizeCheckInterval = 100
+
 // Logger is an append-only, hash-chained audit log writer.
 type Logger struct {
-	mu       sync.Mutex
-	path     string
-	seq      uint64
-	prevHash string
+	mu           sync.Mutex
+	path         string
+	seq          uint64
+	prevHash     string
+	maxSizeBytes int64 // 0 = unlimited
+	writesSince  int   // writes since last size check
+	sizeLimitHit bool  // true once the limit has been reached
 }
 
 // NewLogger opens or creates an audit log at the given path.
 // It reads the last entry to resume the hash chain.
-func NewLogger(path string) (*Logger, error) {
+// maxSizeBytes controls the maximum file size; 0 means unlimited.
+func NewLogger(path string, maxSizeBytes int64) (*Logger, error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("create audit dir: %w", err)
 	}
 
 	l := &Logger{
-		path:     path,
-		prevHash: genesisHash(),
+		path:         path,
+		prevHash:     genesisHash(),
+		maxSizeBytes: maxSizeBytes,
 	}
 
 	// Read existing log to find last entry.
@@ -48,11 +58,41 @@ func NewLogger(path string) (*Logger, error) {
 	return l, nil
 }
 
+// checkSize returns true if the log file has exceeded the configured size limit.
+// Must be called with l.mu held.
+func (l *Logger) checkSize() bool {
+	if l.maxSizeBytes <= 0 {
+		return false
+	}
+	if l.sizeLimitHit {
+		return true
+	}
+	l.writesSince++
+	if l.writesSince < sizeCheckInterval {
+		return false
+	}
+	l.writesSince = 0
+	info, err := os.Stat(l.path)
+	if err != nil {
+		return false
+	}
+	if info.Size() >= l.maxSizeBytes {
+		log.Printf("doit: audit log %s has reached size limit (%d bytes); further entries will not be written", l.path, l.maxSizeBytes)
+		l.sizeLimitHit = true
+		return true
+	}
+	return false
+}
+
 // Log writes an audit entry to the log file. If opts is non-nil, policy
 // evaluation metadata is included in the entry.
 func (l *Logger) Log(pipeline string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, cwd string, retry bool, opts *LogOptions) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	if l.checkSize() {
+		return nil // silently skip when size limit reached (warning already logged)
+	}
 
 	l.seq++
 	entry := Entry{

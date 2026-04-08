@@ -59,9 +59,18 @@ func (s *TokenStore) Issue(command string, args []string) (string, error) {
 }
 
 // Validate checks the token and consumes it (single-use). Returns the entry on success.
+// It also purges any expired tokens to keep the store bounded.
 func (s *TokenStore) Validate(token string, args []string) (*TokenEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Purge expired tokens inline (lock already held).
+	now := time.Now()
+	for tok, entry := range s.tokens {
+		if now.After(entry.ExpiresAt) {
+			delete(s.tokens, tok)
+		}
+	}
 
 	entry, ok := s.tokens[token]
 	if !ok {

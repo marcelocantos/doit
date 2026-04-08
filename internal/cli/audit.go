@@ -28,8 +28,7 @@ func RunAudit(w io.Writer, logPath string, args []string) int {
 		n := 20
 		entries, err := audit.Tail(logPath, n)
 		if err != nil {
-			fmt.Fprintf(w, "doit audit: %v\n", err)
-			return 1
+			fmt.Fprintf(w, "doit audit: warning: %v\n", err)
 		}
 		if len(entries) == 0 {
 			fmt.Fprintln(w, "no audit entries")
