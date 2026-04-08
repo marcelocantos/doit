@@ -47,8 +47,15 @@ maintenance activities. Append-only — newest entries at the bottom.
 
 ## 2026-04-08 — /release v0.2.0
 
-- **Commit**: `(pending)`
+- **Commit**: `70c5abd`
 - **Outcome**: Released v0.2.0 (darwin-arm64, linux-amd64, linux-arm64).
   Major architectural evolution: MCP server, three-level policy engine,
   Starlark L1 rules, per-project config, legacy cleanup. All 15 audit
   findings addressed. Homebrew formula updated.
+
+## 2026-04-09 — /release v0.3.0
+
+- **Commit**: `(pending)`
+- **Outcome**: Released v0.3.0 (darwin-arm64, linux-amd64, linux-arm64).
+  Single binary consolidation, MCP elicitation for policy decisions,
+  two-phase rule promotion, admin MCP tools. Homebrew formula updated.

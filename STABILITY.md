@@ -5,7 +5,7 @@ breaking changes to the public API, MCP interface, configuration format,
 audit log format, or Starlark rule contract will require a major version
 bump. The pre-1.0 period exists to get these right.
 
-Snapshot as of v0.2.0.
+Snapshot as of v0.3.0.
 
 ## Interaction surface catalogue
 
@@ -13,10 +13,13 @@ Snapshot as of v0.2.0.
 
 | Tool | Parameters | Stability |
 |---|---|---|
-| `execute` | command, justification, safety_arg, cwd, env, approved, retry | Stable |
-| `dry_run` | command, justification, safety_arg | Stable |
-| `policy_status` | (none) | Stable |
-| `approve` | token | Stable |
+| `doit_execute` | command, justification, safety_arg, cwd, approved | Stable |
+| `doit_dry_run` | command, justification, safety_arg, cwd | Stable |
+| `doit_policy_status` | (none) | Stable |
+| `doit_approve` | token, command | Stable |
+| `doit_list_capabilities` | tier (optional) | Stable |
+| `doit_audit_verify` | (none) | Stable |
+| `doit_audit_tail` | count (optional, default 20) | Stable |
 
 ### Engine API (`engine/` package)
 
@@ -31,20 +34,27 @@ Snapshot as of v0.2.0.
 | `Engine.PolicyStatus()` | `map[string]any` | Stable |
 | `Request` struct | Command, Args, Justification, SafetyArg, Cwd, Env, Approved, Retry | Stable |
 | `Result` struct | ExitCode, Stdout, Stderr, PolicyLevel, PolicyDecision, PolicyReason, PolicyRuleID, EscalateToken | Stable |
-| `EvalResult` struct | Decision, Level, Reason, RuleID, Segments, Tiers | Stable |
+| `EvalResult` struct | Decision, Level, Reason, RuleID, Bypassable, Segments, Tiers | Stable |
+| `Engine.ListCapabilities()` | `[]CapabilityInfo` | Stable |
+| `Engine.AuditPath()` | `string` | Stable |
+| `Engine.RecordDecision(command, segments, decision)` | `error` | Fluid |
+| `Engine.ProposeRules(command, decision)` | `[]RuleProposal` | Fluid |
+| `Engine.WriteStarlarkRule(ruleID, source)` | `error` | Fluid |
 
-### CLI subcommands and flags (legacy, secondary interface)
+### MCP elicitation protocol
 
-| Surface | Signature | Stability |
-|---|---|---|
-| Direct execution | `doit <capability> [args...]` | Stable |
-| Config rule bypass | `doit --retry <cmd> [args...]` | Stable |
-| List capabilities | `doit --list [--tier <tier>]` | Stable |
-| Help | `doit --help [<capability>]` | Stable |
-| Agent guide | `doit --help-agent` | Stable |
-| Audit operations | `doit --audit <verify\|show\|tail>` | Stable |
-| Policy operations | `doit --policy <promote\|list\|approve\|reject>` | Needs review |
-| Version | `doit --version` | Stable |
+| Phase | Trigger | Options | Stability |
+|---|---|---|---|
+| Phase 1 (decision) | Policy escalation or bypassable deny | Allow once, Allow always, Deny, Deny always | Stable |
+| Phase 2 (promotion) | "Always" choice in Phase 1 | Starlark rules at narrow/moderate/broad generality, or decline | Fluid |
+
+### CLI flags (MCP server binary)
+
+| Flag | Stability |
+|---|---|
+| `--version` | Stable |
+| `--help` | Stable |
+| `--config <path>` | Stable |
 
 ### Configuration schema (`~/.config/doit/config.yaml`)
 
@@ -172,16 +182,14 @@ Genesis hash: SHA-256 of `"doit-genesis"`.
 
 ## Gaps and prerequisites for 1.0
 
-- **`doit --audit tail` hardcoded to 20 entries**: Should accept an optional
-  count argument before locking the CLI surface.
-- **L3 policy UX**: The L3 escalation/approval flow (token-based) needs more
-  real-world usage before declaring stable.
-- **`--policy` subcommands**: promote/list/approve/reject interface is
-  functional but may need refinement.
+- **Elicitation phase 2 maturity**: Rule promotion via elicitation is functional
+  but the proposal generation (`ProposeRules`) uses simple pattern extraction.
+  Needs real-world usage to validate rule quality.
+- **L2 policy store UX**: No MCP tool for listing/managing L2 entries yet.
+- **L3 policy integration**: L3 (live LLM) evaluation needs real-world testing
+  before the elicitation flow is declared stable.
 
 ## Out of scope for 1.0
 
 - **Config-defined capabilities**: Declaring new capabilities in YAML.
-- **Append redirect (`››`)**: Not yet needed. Can be added without breaking
-  changes.
 - **Out-of-band user interface**: Approval queue, notification widgets.
