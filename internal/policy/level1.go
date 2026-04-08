@@ -9,12 +9,14 @@ import (
 	"strings"
 
 	"github.com/marcelocantos/doit/internal/cap"
+	doitstar "github.com/marcelocantos/doit/internal/starlark"
 	"github.com/marcelocantos/doit/internal/rules"
 )
 
 // Level1 evaluates commands against deterministic rules.
 type Level1 struct {
-	rules []Rule
+	rules     []Rule
+	starlark  *doitstar.Evaluator
 }
 
 // Rule is a named, testable deterministic rule.
@@ -27,7 +29,14 @@ type Rule struct {
 
 // NewLevel1 creates a Level1 engine with built-in and config-derived rules.
 func NewLevel1(cfgRules map[string]rules.CapRuleConfig) *Level1 {
-	l := &Level1{}
+	return NewLevel1WithStarlark(cfgRules, nil)
+}
+
+// NewLevel1WithStarlark creates a Level1 engine with built-in, config-derived,
+// and Starlark rules. Starlark rules are evaluated after built-in rules but
+// before the auto-allow safe-pipeline rule.
+func NewLevel1WithStarlark(cfgRules map[string]rules.CapRuleConfig, starlarkEval *doitstar.Evaluator) *Level1 {
+	l := &Level1{starlark: starlarkEval}
 
 	// Hardcoded deny rules (never bypassable).
 	l.rules = append(l.rules, Rule{
@@ -70,6 +79,29 @@ func (l *Level1) Evaluate(req *Request) *Result {
 			return result
 		}
 	}
+
+	// Evaluate Starlark rules.
+	if l.starlark != nil {
+		for _, seg := range req.Segments {
+			starResult, ruleID := l.starlark.EvaluateCommand(seg.CapName, seg.Args, req.Retry)
+			if starResult != nil {
+				dec := Escalate
+				switch starResult.Decision {
+				case "allow":
+					dec = Allow
+				case "deny":
+					dec = Deny
+				}
+				return &Result{
+					Decision: dec,
+					Level:    1,
+					Reason:   starResult.Reason,
+					RuleID:   ruleID,
+				}
+			}
+		}
+	}
+
 	return &Result{
 		Decision: Escalate,
 		Level:    1,
@@ -77,9 +109,17 @@ func (l *Level1) Evaluate(req *Request) *Result {
 	}
 }
 
-// Rules returns the list of rules for inspection/testing.
+// Rules returns the list of Go rules for inspection/testing.
 func (l *Level1) Rules() []Rule {
 	return l.rules
+}
+
+// StarlarkRuleCount returns the number of loaded Starlark rules.
+func (l *Level1) StarlarkRuleCount() int {
+	if l.starlark == nil {
+		return 0
+	}
+	return l.starlark.RuleCount()
 }
 
 // --- Built-in rules ---

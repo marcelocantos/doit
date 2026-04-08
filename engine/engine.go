@@ -26,6 +26,7 @@ import (
 	"github.com/marcelocantos/doit/internal/llm"
 	"github.com/marcelocantos/doit/internal/pipeline"
 	"github.com/marcelocantos/doit/internal/policy"
+	doitstar "github.com/marcelocantos/doit/internal/starlark"
 )
 
 // Options configures Engine creation.
@@ -154,7 +155,17 @@ func New(opts Options, engineOpts ...EngineOption) (*Engine, error) {
 		if cfgRules == nil {
 			cfgRules = config.DefaultRules()
 		}
-		e.policyL1 = policy.NewLevel1(cfgRules)
+		var starlarkEval *doitstar.Evaluator
+		if cfg.Policy.StarlarkRulesDir != "" {
+			starRules, starErr := doitstar.LoadDir(cfg.Policy.StarlarkRulesDir)
+			if starErr != nil {
+				log.Printf("doit: engine: starlark rules: %v (continuing without starlark rules)", starErr)
+			} else if len(starRules) > 0 {
+				starlarkEval = doitstar.NewEvaluator(starRules)
+				log.Printf("doit: engine: loaded %d starlark rules", len(starRules))
+			}
+		}
+		e.policyL1 = policy.NewLevel1WithStarlark(cfgRules, starlarkEval)
 	}
 
 	// L2: learned policy store.
@@ -378,6 +389,9 @@ func (e *Engine) PolicyStatus() map[string]any {
 	e.l1Mu.RLock()
 	if e.policyL1 != nil {
 		status["l1_rules"] = len(e.policyL1.Rules())
+		if sc := e.policyL1.StarlarkRuleCount(); sc > 0 {
+			status["l1_starlark_rules"] = sc
+		}
 	}
 	e.l1Mu.RUnlock()
 

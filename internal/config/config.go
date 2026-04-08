@@ -23,12 +23,13 @@ type Config struct {
 
 // PolicyConfig controls the policy engine.
 type PolicyConfig struct {
-	Level1Enabled bool   `yaml:"level1_enabled"`
-	Level2Enabled bool   `yaml:"level2_enabled"`
-	Level2Path    string `yaml:"level2_path,omitempty"`
-	Level3Enabled bool   `yaml:"level3_enabled"`
-	Level3Model   string `yaml:"level3_model,omitempty"`
-	Level3Timeout string `yaml:"level3_timeout,omitempty"`
+	Level1Enabled    bool   `yaml:"level1_enabled"`
+	Level2Enabled    bool   `yaml:"level2_enabled"`
+	Level2Path       string `yaml:"level2_path,omitempty"`
+	Level3Enabled    bool   `yaml:"level3_enabled"`
+	Level3Model      string `yaml:"level3_model,omitempty"`
+	Level3Timeout    string `yaml:"level3_timeout,omitempty"`
+	StarlarkRulesDir string `yaml:"starlark_rules_dir,omitempty"`
 }
 
 // DefaultLevel3Timeout is used when no level3_timeout is configured.
