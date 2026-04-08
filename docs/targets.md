@@ -5,18 +5,18 @@
 ### 🎯T3 Starlark L1 rules
 
 - **Weight**: 3 (value 3 / cost 2)
-- **Status**: not started
+- **Status**: achieved
 
 L1 deterministic rules are expressed in Starlark (sandboxed, deterministic,
 Python-like). LLMs can author Starlark rules as part of L3→L1 promotion.
 Each rule has a pattern, decision, justification, and test suite.
 
 **Acceptance criteria**:
-- Starlark interpreter embedded (e.g. `go.starlark.net`).
-- L1 rules loadable from `.star` files.
-- Each rule includes test cases that are validated on load.
-- L3→L1 promotion generates Starlark code + tests for human review.
-- Existing hardcoded Go rules can be expressed equivalently in Starlark.
+- [x] Starlark interpreter embedded (`go.starlark.net`).
+- [x] L1 rules loadable from `.star` files (`internal/starlark/loader.go`).
+- [x] Each rule includes test cases that are validated on load.
+- [x] L3→L1 promotion generates Starlark code + tests (`internal/starlark/generator.go`).
+- [x] Existing hardcoded Go rules expressed equivalently in Starlark (`rules/*.star`).
 
 ---
 
