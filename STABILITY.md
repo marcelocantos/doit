@@ -1,36 +1,50 @@
 # Stability
 
 doit follows [semantic versioning](https://semver.org/). Once 1.0 ships,
-breaking changes to the public CLI interface, configuration format, audit log
-format, or pipeline syntax will require a major version bump. The pre-1.0
-period exists to get these right.
+breaking changes to the public API, MCP interface, configuration format,
+audit log format, or Starlark rule contract will require a major version
+bump. The pre-1.0 period exists to get these right.
+
+Snapshot as of v0.2.0.
 
 ## Interaction surface catalogue
 
-### CLI subcommands and flags
+### MCP tools (primary interface)
+
+| Tool | Parameters | Stability |
+|---|---|---|
+| `execute` | command, justification, safety_arg, cwd, env, approved, retry | Stable |
+| `dry_run` | command, justification, safety_arg | Stable |
+| `policy_status` | (none) | Stable |
+| `approve` | token | Stable |
+
+### Engine API (`engine/` package)
+
+| Surface | Signature | Stability |
+|---|---|---|
+| `New(opts Options, engineOpts ...EngineOption)` | `(*Engine, error)` | Stable |
+| `Options.ConfigPath` | `string` | Stable |
+| `Options.ProjectRoot` | `string` | Stable |
+| `Engine.Execute(ctx, req)` | `Result` | Stable |
+| `Engine.Evaluate(ctx, req)` | `EvalResult` | Stable |
+| `Engine.ExecuteStreaming(ctx, req, stdout, stderr)` | `Result` | Stable |
+| `Engine.PolicyStatus()` | `map[string]any` | Stable |
+| `Request` struct | Command, Args, Justification, SafetyArg, Cwd, Env, Approved, Retry | Stable |
+| `Result` struct | ExitCode, Stdout, Stderr, PolicyLevel, PolicyDecision, PolicyReason, PolicyRuleID, EscalateToken | Stable |
+| `EvalResult` struct | Decision, Level, Reason, RuleID, Segments, Tiers | Stable |
+
+### CLI subcommands and flags (legacy, secondary interface)
 
 | Surface | Signature | Stability |
 |---|---|---|
 | Direct execution | `doit <capability> [args...]` | Stable |
-| Pipeline | `doit <cmd> ¦ <cmd> ¦ ...` | Stable |
-| Compound command | `doit <cmd> ＆＆ <cmd> ‖ <cmd> ；...` | Stable |
 | Config rule bypass | `doit --retry <cmd> [args...]` | Stable |
 | List capabilities | `doit --list [--tier <tier>]` | Stable |
 | Help | `doit --help [<capability>]` | Stable |
 | Agent guide | `doit --help-agent` | Stable |
 | Audit operations | `doit --audit <verify\|show\|tail>` | Stable |
+| Policy operations | `doit --policy <promote\|list\|approve\|reject>` | Needs review |
 | Version | `doit --version` | Stable |
-
-### Pipeline operators
-
-| Operator | Unicode | Meaning | Stability |
-|---|---|---|---|
-| `¦` | U+00A6 | Pipe (stdout to stdin) | Stable |
-| `›` | U+203A | Redirect stdout to file | Stable |
-| `‹` | U+2039 | Redirect stdin from file | Stable |
-| `＆＆` | U+FF06 x2 | And-then (run next if previous succeeded) | Stable |
-| `‖` | U+2016 | Or-else (run next if previous failed) | Stable |
-| `；` | U+FF1B | Sequential (run next regardless) | Stable |
 
 ### Configuration schema (`~/.config/doit/config.yaml`)
 
@@ -41,9 +55,45 @@ period exists to get these right.
 | `tiers.write` | bool | `true` | Stable |
 | `tiers.dangerous` | bool | `false` | Stable |
 | `audit.path` | string | `~/.local/share/doit/audit.jsonl` | Stable |
-| `audit.max_size_mb` | int | `100` | Fluid — field exists but is not enforced |
+| `audit.max_size_mb` | int | `100` | Stable |
 | `rules.<cap>.reject_flags` | []string | per-capability | Stable |
 | `rules.<cap>.subcommands.<sub>.reject_flags` | []string | per-subcommand | Stable |
+| `policy.level1_enabled` | bool | `true` | Stable |
+| `policy.level2_enabled` | bool | `true` | Stable |
+| `policy.level2_path` | string | `~/.local/share/doit/policy.json` | Stable |
+| `policy.level3_enabled` | bool | `false` | Stable |
+| `policy.level3_model` | string | `""` | Stable |
+| `policy.level3_timeout` | string | `"60s"` | Stable |
+| `policy.starlark_rules_dir` | string | `""` | Stable |
+
+### Per-project configuration (`.doit/config.yaml`)
+
+| Behaviour | Stability |
+|---|---|
+| Tighten-only tiers (can disable, cannot enable) | Stable |
+| Additive rules (can add, cannot remove global rules) | Stable |
+| Discovered via `Options.ProjectRoot` | Stable |
+
+### Starlark rule contract (`.star` files)
+
+| Global | Type | Required | Stability |
+|---|---|---|---|
+| `rule_id` | string | yes | Stable |
+| `description` | string | no | Stable |
+| `bypassable` | bool | no (default false) | Stable |
+| `check` | function(command, args) → dict or None | yes | Stable |
+| `tests` | list of test dicts | yes | Stable |
+
+Check return dict: `{"decision": "allow"\|"deny"\|"escalate", "reason": "..."}`.
+Test dict: `{"command": "...", "args": [...], "expect": "allow"\|"deny"\|"escalate"}`.
+
+### Three-level policy engine
+
+| Level | Type | Stability |
+|---|---|---|
+| L1: Deterministic (Go rules + Starlark) | first-match-wins | Stable |
+| L2: Learned patterns | policy store | Stable |
+| L3: Live LLM | escalation with token | Needs review |
 
 ### Audit log entry schema (JSON Lines)
 
@@ -73,29 +123,29 @@ Genesis hash: SHA-256 of `"doit-genesis"`.
 | write | 2 | enabled | Stable |
 | dangerous | 3 | disabled | Stable |
 
-### Built-in capabilities
+### Built-in capabilities (19)
 
-| Name | Tier | Description | Stability |
-|---|---|---|---|
-| cat | read | concatenate and display files | Stable |
-| chmod | dangerous | change file permissions | Stable |
-| cp | write | copy files and directories | Stable |
-| find | read | search for files (blocks -exec/-delete) | Stable |
-| git | varies | version control (per-subcommand tiers) | Stable |
-| go | varies | Go toolchain (run/generate/install/tool/get are dangerous) | Stable |
-| grep | read | search file contents | Stable |
-| head | read | output first part of files | Stable |
-| ls | read | list directory contents | Stable |
-| make | build | build targets (blocks -f/-C) | Stable |
-| mkdir | write | create directories | Stable |
-| mv | write | move or rename files | Stable |
-| rm | dangerous | remove files (requires args) | Stable |
-| sort | read | sort lines of text | Stable |
-| tail | read | output last part of files | Stable |
-| tee | write | duplicate stdin to stdout and files | Stable |
-| tr | read | translate or delete characters | Stable |
-| uniq | read | report or omit repeated lines | Stable |
-| wc | read | word, line, character, byte count | Stable |
+| Name | Tier | Stability |
+|---|---|---|
+| cat | read | Stable |
+| chmod | dangerous | Stable |
+| cp | write | Stable |
+| find | read | Stable |
+| git | varies | Stable |
+| go | varies | Stable |
+| grep | read | Stable |
+| head | read | Stable |
+| ls | read | Stable |
+| make | build | Stable |
+| mkdir | write | Stable |
+| mv | write | Stable |
+| rm | dangerous | Stable |
+| sort | read | Stable |
+| tail | read | Stable |
+| tee | write | Stable |
+| tr | read | Stable |
+| uniq | read | Stable |
+| wc | read | Stable |
 
 ### Hardcoded rules (permanent, never bypassable)
 
@@ -122,26 +172,16 @@ Genesis hash: SHA-256 of `"doit-genesis"`.
 
 ## Gaps and prerequisites for 1.0
 
-- **`audit.max_size_mb` not enforced**: The config field exists but log rotation
-  is not implemented. Must either implement it or remove the field before 1.0.
-- **Test coverage**: 3 of 8 packages have tests. The pipeline parser/executor,
-  audit system, and rules system are tested. The capability registry, built-in
-  capabilities, CLI handlers, and config loader have zero coverage. Critical
-  paths (tier checking, rule enforcement, exit code propagation) should be
-  tested before 1.0.
-- **Per-project config**: Currently global only (`~/.config/doit/config.yaml`).
-  Per-project overrides (e.g., `.doit.yaml` in the repo root) would let
-  projects ship their own safety rules. Needs design before 1.0 to avoid a
-  breaking config change later.
 - **`doit --audit tail` hardcoded to 20 entries**: Should accept an optional
   count argument before locking the CLI surface.
+- **L3 policy UX**: The L3 escalation/approval flow (token-based) needs more
+  real-world usage before declaring stable.
+- **`--policy` subcommands**: promote/list/approve/reject interface is
+  functional but may need refinement.
 
 ## Out of scope for 1.0
 
-- **Embedded scripting (Starlark)**: User-defined capabilities without
-  recompilation. Planned but not for the initial stable release.
-- **Config-defined capabilities**: Declaring new capabilities in YAML. Deferred
-  to post-1.0.
+- **Config-defined capabilities**: Declaring new capabilities in YAML.
 - **Append redirect (`››`)**: Not yet needed. Can be added without breaking
   changes.
-- **CI pipeline**: Not a stability concern for the binary itself.
+- **Out-of-band user interface**: Approval queue, notification widgets.
