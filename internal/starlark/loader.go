@@ -11,6 +11,7 @@ import (
 
 	"go.starlark.net/starlark"
 	starlarklib "go.starlark.net/lib/json"
+	"go.starlark.net/syntax"
 )
 
 // Rule is a Starlark-defined L1 rule loaded from a .star file.
@@ -61,7 +62,7 @@ func LoadRuleFromSource(filename, source string) (*Rule, error) {
 		"json": starlarklib.Module,
 	}
 
-	globals, err := starlark.ExecFile(thread, filename, source, predeclared)
+	globals, err := starlark.ExecFileOptions(&syntax.FileOptions{}, thread, filename, source, predeclared)
 	if err != nil {
 		return nil, fmt.Errorf("exec starlark: %w", err)
 	}
