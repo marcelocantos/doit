@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -434,6 +435,192 @@ func (e *Engine) ListCapabilities() []CapabilityInfo {
 // AuditPath returns the configured audit log path.
 func (e *Engine) AuditPath() string {
 	return e.cfg.Audit.Path
+}
+
+// StarlarkRulesDir returns the configured Starlark rules directory.
+func (e *Engine) StarlarkRulesDir() string {
+	return e.cfg.Policy.StarlarkRulesDir
+}
+
+// RecordDecision adds a learned policy entry (L2) for a specific command
+// pattern and reloads the L2 engine.
+func (e *Engine) RecordDecision(command string, segments []string, decision string) error {
+	if e.storePath == "" {
+		return fmt.Errorf("no policy store configured")
+	}
+
+	// Build a match criteria from the first segment (capability + subcommand).
+	cap := ""
+	subcmd := ""
+	if len(segments) > 0 {
+		parts := strings.SplitN(segments[0], " ", 2)
+		cap = parts[0]
+		if len(parts) > 1 {
+			subcmd = strings.Fields(parts[1])[0]
+		}
+	}
+	if cap == "" {
+		// Fall back to parsing command string.
+		parts := strings.Fields(command)
+		if len(parts) > 0 {
+			cap = parts[0]
+		}
+		if len(parts) > 1 {
+			subcmd = parts[1]
+		}
+	}
+
+	now := time.Now().UTC()
+	entry := policy.PolicyEntry{
+		ID:          fmt.Sprintf("user-%s-%d", cap, now.UnixMilli()),
+		Description: fmt.Sprintf("User %s for %s", decision, command),
+		Match: policy.MatchCriteria{
+			Cap:    cap,
+			Subcmd: subcmd,
+		},
+		Decision:   decision,
+		Reasoning:  "User decision via MCP elicitation",
+		Confidence: "high",
+		Provenance: "human",
+		Approved:   true,
+		Review: policy.ReviewSchedule{
+			Created:    now,
+			NextReview: now.Add(7 * 24 * time.Hour),
+		},
+	}
+
+	added, err := policy.AppendEntries(e.storePath, []policy.PolicyEntry{entry})
+	if err != nil {
+		return fmt.Errorf("append policy entry: %w", err)
+	}
+	if added > 0 {
+		e.reloadL2()
+	}
+	return nil
+}
+
+// RuleProposal describes a proposed Starlark rule at a specific generality.
+type RuleProposal struct {
+	Description string // human-readable description of what this rule covers
+	Generality  string // "broad", "moderate", "narrow"
+	Source      string // generated Starlark source code
+}
+
+// ProposeRules generates Starlark rule proposals at varying generality levels
+// for a given command decision. Returns 2-3 options for the user to choose from.
+func (e *Engine) ProposeRules(command string, decision string) []RuleProposal {
+	parts := strings.Fields(command)
+	if len(parts) == 0 {
+		return nil
+	}
+
+	capName := parts[0]
+	subcmd := ""
+	if len(parts) > 1 && !strings.HasPrefix(parts[1], "-") {
+		subcmd = parts[1]
+	}
+
+	// Extract flags from the command.
+	var flags []string
+	for _, arg := range parts[1:] {
+		if strings.HasPrefix(arg, "-") {
+			flags = append(flags, arg)
+		}
+	}
+
+	var proposals []RuleProposal
+	decWord := "deny"
+	if decision == "allow" {
+		decWord = "allow"
+	}
+	bypassable := decision != "deny" // allow rules are bypassable
+
+	// Narrow: exact command pattern (cap + subcmd + specific flags).
+	if subcmd != "" && len(flags) > 0 {
+		ruleID := fmt.Sprintf("%s-%s-%s-%s", decWord, capName, subcmd, strings.Join(flags, "-"))
+		source := doitstar.Generate(doitstar.GenerateRequest{
+			RuleID:      ruleID,
+			Description: fmt.Sprintf("%s %s %s with %s", upperFirst(decWord), capName, subcmd, strings.Join(flags, ", ")),
+			Bypassable:  bypassable,
+			Command:     capName,
+			Subcommand:  subcmd,
+			RejectFlags: flags,
+			Decision:    decWord,
+			TestCases: []doitstar.GenerateTestCase{
+				{Command: capName, Args: append([]string{subcmd}, flags...), Expect: decWord},
+				{Command: capName, Args: []string{subcmd}, Expect: "escalate"},
+			},
+		})
+		proposals = append(proposals, RuleProposal{
+			Description: fmt.Sprintf("%s `%s %s` with %s (narrow)", upperFirst(decWord), capName, subcmd, strings.Join(flags, ", ")),
+			Generality:  "narrow",
+			Source:      source,
+		})
+	}
+
+	// Moderate: cap + subcmd (any flags).
+	if subcmd != "" {
+		ruleID := fmt.Sprintf("%s-%s-%s", decWord, capName, subcmd)
+		source := doitstar.Generate(doitstar.GenerateRequest{
+			RuleID:      ruleID,
+			Description: fmt.Sprintf("%s %s %s (any flags)", upperFirst(decWord), capName, subcmd),
+			Bypassable:  bypassable,
+			Command:     capName,
+			Subcommand:  subcmd,
+			Decision:    decWord,
+			TestCases: []doitstar.GenerateTestCase{
+				{Command: capName, Args: []string{subcmd}, Expect: decWord},
+				{Command: capName, Args: []string{"other"}, Expect: "escalate"},
+			},
+		})
+		proposals = append(proposals, RuleProposal{
+			Description: fmt.Sprintf("%s `%s %s` (any flags) (moderate)", upperFirst(decWord), capName, subcmd),
+			Generality:  "moderate",
+			Source:      source,
+		})
+	}
+
+	// Broad: cap only (any subcommand, any flags).
+	{
+		ruleID := fmt.Sprintf("%s-%s", decWord, capName)
+		source := doitstar.Generate(doitstar.GenerateRequest{
+			RuleID:      ruleID,
+			Description: fmt.Sprintf("%s all %s commands", upperFirst(decWord), capName),
+			Bypassable:  bypassable,
+			Command:     capName,
+			Decision:    decWord,
+			TestCases: []doitstar.GenerateTestCase{
+				{Command: capName, Args: nil, Expect: decWord},
+			},
+		})
+		proposals = append(proposals, RuleProposal{
+			Description: fmt.Sprintf("%s all `%s` commands (broad)", upperFirst(decWord), capName),
+			Generality:  "broad",
+			Source:      source,
+		})
+	}
+
+	return proposals
+}
+
+// WriteStarlarkRule writes a Starlark rule to the rules directory.
+func (e *Engine) WriteStarlarkRule(ruleID, source string) error {
+	dir := e.cfg.Policy.StarlarkRulesDir
+	if dir == "" {
+		return fmt.Errorf("no starlark_rules_dir configured")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create rules dir: %w", err)
+	}
+	path := filepath.Join(dir, ruleID+".star")
+	return os.WriteFile(path, []byte(source), 0o644)
+}
+
+func upperFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // ValidateApproval checks an approval token. Returns nil on success.

@@ -10,7 +10,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -129,15 +131,15 @@ func handleExecute(srv *server.MCPServer, eng *engine.Engine) server.ToolHandler
 				case "allow_always":
 					r.Retry = true
 					result := eng.Execute(ctx, r)
-					// TODO: Record in L2 learned policy.
-					// TODO: Fire elicitation phase 2 for rule promotion.
+					_ = eng.RecordDecision(command, evalResult.Segments, "allow")
+					elicitRulePromotion(ctx, srv, eng, command, "allow")
 					return buildResult(result), nil
 				case "deny":
 					return mcp.NewToolResultError(fmt.Sprintf("Denied by user: %s", command)), nil
 				case "deny_always":
-					// TODO: Record in L2 learned policy.
-					// TODO: Fire elicitation phase 2 for rule promotion.
-					return mcp.NewToolResultError(fmt.Sprintf("Denied by user: %s", command)), nil
+					_ = eng.RecordDecision(command, evalResult.Segments, "deny")
+					elicitRulePromotion(ctx, srv, eng, command, "deny")
+					return mcp.NewToolResultError(fmt.Sprintf("Denied by user (permanent): %s", command)), nil
 				}
 			}
 
@@ -194,6 +196,60 @@ func elicitPolicyDecision(ctx context.Context, srv *server.MCPServer, command st
 		return "deny", nil
 	}
 	return decision, nil
+}
+
+// elicitRulePromotion fires phase 2 elicitation: propose Starlark rules at
+// varying generality levels for the user to choose from. Non-blocking — errors
+// are silently ignored (the command decision has already been recorded in L2).
+func elicitRulePromotion(ctx context.Context, srv *server.MCPServer, eng *engine.Engine, command, decision string) {
+	proposals := eng.ProposeRules(command, decision)
+	if len(proposals) == 0 {
+		return
+	}
+
+	// Build enum options from proposals.
+	options := make([]string, 0, len(proposals)+1)
+	for _, p := range proposals {
+		options = append(options, p.Description)
+	}
+	options = append(options, "No rule — just remember this command")
+
+	result, err := srv.RequestElicitation(ctx, mcp.ElicitationRequest{
+		Params: mcp.ElicitationParams{
+			Message: fmt.Sprintf("Would you like to create a permanent rule for `%s`?", command),
+			RequestedSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"rule": map[string]any{
+						"type":        "string",
+						"description": "Select a rule to create, or decline",
+						"enum":        options,
+					},
+				},
+				"required": []string{"rule"},
+			},
+		},
+	})
+	if err != nil || result.Action != mcp.ElicitationResponseActionAccept {
+		return
+	}
+
+	data, ok := result.Content.(map[string]any)
+	if !ok {
+		return
+	}
+	chosen, _ := data["rule"].(string)
+
+	// Find the matching proposal and write the rule.
+	for _, p := range proposals {
+		if p.Description == chosen {
+			ruleID := fmt.Sprintf("user-%s-%d", decision, time.Now().UnixMilli())
+			if err := eng.WriteStarlarkRule(ruleID, p.Source); err != nil {
+				log.Printf("doit: write starlark rule: %v", err)
+			}
+			return
+		}
+	}
 }
 
 func executeAndRespond(ctx context.Context, eng *engine.Engine, r engine.Request) (*mcp.CallToolResult, error) {
