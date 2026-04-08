@@ -1,3 +1,6 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
 package audit
 
 import (
@@ -11,7 +14,7 @@ func seedTestLog(t *testing.T) (string, *Logger) {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.jsonl")
-	logger, err := NewLogger(path)
+	logger, err := NewLogger(path, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +105,7 @@ func TestQueryByCap(t *testing.T) {
 func TestQueryByTimeRange(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.jsonl")
-	logger, err := NewLogger(path)
+	logger, err := NewLogger(path, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +201,7 @@ func TestQueryNonexistentFile(t *testing.T) {
 func TestQueryEmptyLog(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.jsonl")
-	logger, err := NewLogger(path)
+	logger, err := NewLogger(path, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

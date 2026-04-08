@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/marcelocantos/doit/internal/cap"
-	doitstar "github.com/marcelocantos/doit/internal/starlark"
 	"github.com/marcelocantos/doit/internal/rules"
+	doitstar "github.com/marcelocantos/doit/internal/starlark"
 )
 
 // Level1 evaluates commands against deterministic rules.
@@ -274,28 +274,7 @@ func compileConfigRules(capName string, cfg rules.CapRuleConfig) []Rule {
 
 // HasAnyFlag checks whether any element in args matches one of the given flags.
 // Handles exact match, combined short flags, short flag with value, and
-// long flag with =.
+// long flag with =. Delegates to rules.HasAnyFlag.
 func HasAnyFlag(args []string, flags ...string) bool {
-	for _, arg := range args {
-		if arg == "" || arg[0] != '-' {
-			continue
-		}
-		for _, flag := range flags {
-			if arg == flag {
-				return true
-			}
-			// Short flag: "-j" matches "-j4" (value suffix) and "-rf" (combined)
-			if len(flag) == 2 && flag[0] == '-' && flag[1] != '-' &&
-				len(arg) > 2 && arg[0] == '-' && arg[1] != '-' {
-				if strings.ContainsRune(arg[1:], rune(flag[1])) {
-					return true
-				}
-			}
-			// Long flag with =: "--force" matches "--force=yes"
-			if len(flag) > 2 && flag[0:2] == "--" && strings.HasPrefix(arg, flag+"=") {
-				return true
-			}
-		}
-	}
-	return false
+	return rules.HasAnyFlag(args, flags...)
 }

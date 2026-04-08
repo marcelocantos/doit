@@ -1,3 +1,6 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
 package cli
 
 import (
@@ -94,22 +97,6 @@ func runShell(ctx context.Context, command string, stdin io.Reader, stdout, stde
 	var doitExitErr *builtin.ExitError
 	if errors.As(err, &doitExitErr) {
 		return doitExitErr.Code, ""
-	}
-	fmt.Fprintf(stderr, "doit: %v\n", err)
-	return 2, err.Error()
-}
-
-// resolveError extracts an exit code from an error. For ExitError (command
-// exited with non-zero status), the code is propagated silently — the
-// command's own stderr output is sufficient. For other errors, doit reports
-// them on stderr.
-func resolveError(err error, stderr io.Writer) (exitCode int, errMsg string) {
-	if err == nil {
-		return 0, ""
-	}
-	var exitErr *builtin.ExitError
-	if errors.As(err, &exitErr) {
-		return exitErr.Code, ""
 	}
 	fmt.Fprintf(stderr, "doit: %v\n", err)
 	return 2, err.Error()

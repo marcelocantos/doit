@@ -1,3 +1,6 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
@@ -40,7 +43,7 @@ func run() int {
 	cfg.ApplyRules(reg)
 
 	// Set up audit logger.
-	logger, err := audit.NewLogger(cfg.Audit.Path)
+	logger, err := audit.NewLogger(cfg.Audit.Path, int64(cfg.Audit.MaxSizeMB)*1024*1024)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "doit: audit: %v\n", err)
 		// Continue without audit logging.

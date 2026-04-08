@@ -1,9 +1,11 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
 package cli
 
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -15,50 +17,6 @@ func newTestRegistry() *cap.Registry {
 	reg := cap.NewRegistry()
 	builtin.RegisterAll(reg)
 	return reg
-}
-
-// --- resolveError tests ---
-
-func TestResolveErrorNil(t *testing.T) {
-	var stderr bytes.Buffer
-	code, msg := resolveError(nil, &stderr)
-	if code != 0 {
-		t.Errorf("expected code 0, got %d", code)
-	}
-	if msg != "" {
-		t.Errorf("expected empty msg, got %q", msg)
-	}
-	if stderr.Len() != 0 {
-		t.Errorf("expected no stderr output, got %q", stderr.String())
-	}
-}
-
-func TestResolveErrorExitError(t *testing.T) {
-	var stderr bytes.Buffer
-	code, msg := resolveError(&builtin.ExitError{Code: 42}, &stderr)
-	if code != 42 {
-		t.Errorf("expected code 42, got %d", code)
-	}
-	if msg != "" {
-		t.Errorf("expected empty msg, got %q", msg)
-	}
-	if stderr.Len() != 0 {
-		t.Errorf("expected no stderr output, got %q", stderr.String())
-	}
-}
-
-func TestResolveErrorOther(t *testing.T) {
-	var stderr bytes.Buffer
-	code, msg := resolveError(fmt.Errorf("something broke"), &stderr)
-	if code != 2 {
-		t.Errorf("expected code 2, got %d", code)
-	}
-	if msg != "something broke" {
-		t.Errorf("expected msg %q, got %q", "something broke", msg)
-	}
-	if !strings.Contains(stderr.String(), "something broke") {
-		t.Errorf("expected stderr to contain error, got %q", stderr.String())
-	}
 }
 
 // --- RunList tests ---

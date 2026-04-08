@@ -21,7 +21,7 @@ guardrails beyond the user clicking "allow". doit sits in between, providing:
 
 ## Install
 
-Requires Go 1.21+.
+Requires Go 1.25+.
 
 ```sh
 git clone https://github.com/marcelocantos/doit.git

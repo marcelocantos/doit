@@ -1,3 +1,6 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
 package audit
 
 import (
@@ -52,6 +55,8 @@ func Verify(path string) error {
 }
 
 // Tail returns the last n entries from the audit log.
+// Malformed entries are skipped; a non-nil error is returned if any were
+// encountered, allowing callers to surface a warning to the user.
 func Tail(path string, n int) ([]Entry, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -63,13 +68,18 @@ func Tail(path string, n int) ([]Entry, error) {
 		n = len(lines)
 	}
 
+	var skipped int
 	entries := make([]Entry, 0, n)
 	for _, line := range lines[len(lines)-n:] {
 		var entry Entry
 		if err := json.Unmarshal(line, &entry); err != nil {
+			skipped++
 			continue
 		}
 		entries = append(entries, entry)
+	}
+	if skipped > 0 {
+		return entries, fmt.Errorf("skipped %d malformed audit log entries", skipped)
 	}
 	return entries, nil
 }

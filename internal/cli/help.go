@@ -1,3 +1,6 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
 package cli
 
 import (
@@ -51,7 +54,6 @@ func printGeneralHelp(w io.Writer) {
 	fmt.Fprintln(w, "  doit --audit <verify|show|tail>   audit log operations")
 	fmt.Fprintln(w, "  doit --help-agent                 full agent usage guide")
 	fmt.Fprintln(w, "  doit --version                    show version")
-	fmt.Fprintln(w, "  doit --daemon                     run as daemon (internal)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "pipeline operators:")
 	fmt.Fprintf(w, "  %s  pipe (stdout → stdin)\n", pipeline.OpPipe)

@@ -1,3 +1,6 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
 package rules
 
 import (
@@ -42,7 +45,7 @@ func checkRmCatastrophic(capName string, args []string) error {
 	if capName != "rm" {
 		return nil
 	}
-	if !hasAnyFlag(args, "-r", "-R") {
+	if !HasAnyFlag(args, "-r", "-R") {
 		return nil
 	}
 	for _, arg := range args {

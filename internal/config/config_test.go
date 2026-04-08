@@ -1,3 +1,6 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
 package config
 
 import (
@@ -46,11 +49,6 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.Policy.Level3Enabled {
 		t.Error("expected Policy.Level3Enabled to be false")
-	}
-
-	// Daemon defaults.
-	if cfg.Daemon.Enabled != nil {
-		t.Errorf("expected Daemon.Enabled to be nil, got %v", *cfg.Daemon.Enabled)
 	}
 
 	// Rules should be nil (defaults applied at ApplyRules time).
@@ -228,29 +226,6 @@ func TestLevel3TimeoutDuration(t *testing.T) {
 			got := p.Level3TimeoutDuration()
 			if got != tt.want {
 				t.Errorf("Level3TimeoutDuration() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestIdleTimeoutDuration(t *testing.T) {
-	tests := []struct {
-		name    string
-		timeout string
-		want    time.Duration
-	}{
-		{"valid duration", "10m", 10 * time.Minute},
-		{"valid seconds", "30s", 30 * time.Second},
-		{"invalid string", "garbage", DefaultIdleTimeout},
-		{"empty string", "", DefaultIdleTimeout},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			d := &DaemonConfig{IdleTimeout: tt.timeout}
-			got := d.IdleTimeoutDuration()
-			if got != tt.want {
-				t.Errorf("IdleTimeoutDuration() = %v, want %v", got, tt.want)
 			}
 		})
 	}
