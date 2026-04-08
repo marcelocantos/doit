@@ -76,6 +76,7 @@ func (l *Level1) Evaluate(req *Request) *Result {
 			continue
 		}
 		if result := r.Check(req); result != nil {
+			result.Bypassable = r.Bypassable
 			return result
 		}
 	}
@@ -83,7 +84,7 @@ func (l *Level1) Evaluate(req *Request) *Result {
 	// Evaluate Starlark rules.
 	if l.starlark != nil {
 		for _, seg := range req.Segments {
-			starResult, ruleID := l.starlark.EvaluateCommand(seg.CapName, seg.Args, req.Retry)
+			starResult, ruleID, starBypassable := l.starlark.EvaluateCommand(seg.CapName, seg.Args, req.Retry)
 			if starResult != nil {
 				dec := Escalate
 				switch starResult.Decision {
@@ -93,10 +94,11 @@ func (l *Level1) Evaluate(req *Request) *Result {
 					dec = Deny
 				}
 				return &Result{
-					Decision: dec,
-					Level:    1,
-					Reason:   starResult.Reason,
-					RuleID:   ruleID,
+					Decision:   dec,
+					Level:      1,
+					Reason:     starResult.Reason,
+					RuleID:     ruleID,
+					Bypassable: starBypassable,
 				}
 			}
 		}

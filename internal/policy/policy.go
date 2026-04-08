@@ -33,10 +33,11 @@ func (d Decision) String() string {
 
 // Result is a structured policy decision.
 type Result struct {
-	Decision Decision
-	Level    int    // 1, 2, or 3
-	Reason   string // human-readable explanation
-	RuleID   string // which rule matched (empty if none)
+	Decision   Decision
+	Level      int    // 1, 2, or 3
+	Reason     string // human-readable explanation
+	RuleID     string // which rule matched (empty if none)
+	Bypassable bool   // true if the user can override this decision
 }
 
 // Request is the structured input to the policy engine.
