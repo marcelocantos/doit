@@ -37,3 +37,12 @@ maintenance activities. Append-only — newest entries at the bottom.
   build fixed to copy agents-guide.md before build (`60e9f1f`). v0.1.0 tagged
   and released on GitHub; Homebrew tap published at
   `marcelocantos/tap/doit`.
+
+## 2026-04-08 — /audit
+
+- **Commit**: `35dea14`
+- **Outcome**: 15 findings (4 high, 6 medium, 4 low, 1 info). Report: docs/audit-2026-04-08.md. Key issues: no CI for push/PR, duplicate `hasAnyFlag`, dead code (`resolveError`, `DaemonConfig`), stale docs (dependency count, Go version).
+- **Deferred**:
+  - `audit.max_size_mb` still not enforced (medium, carried from 2026-02-26)
+  - Token store periodic purge not implemented (low)
+  - NOTICES/THIRD_PARTY file for binary distributions (info)
