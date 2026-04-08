@@ -55,7 +55,10 @@ jobs:
           homebrew_tap: homebrew-tap
           github_token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           formula_folder: Formula
-          install: 'bin.install "doit" => "doit"'
+          version: ${{ github.event.release.tag_name }}
+          install: |
+            bin.install "doit" => "doit"
+            bin.install "doit-mcp" => "doit-mcp"
           target_darwin_arm64: true
           target_linux_amd64: true
           target_linux_arm64: true
