@@ -17,7 +17,6 @@ type Config struct {
 	Tiers  TierConfig                     `yaml:"tiers"`
 	Audit  AuditConfig                    `yaml:"audit"`
 	Rules  map[string]rules.CapRuleConfig `yaml:"rules"`
-	Daemon DaemonConfig                   `yaml:"daemon"`
 	Policy PolicyConfig                   `yaml:"policy"`
 }
 
@@ -44,28 +43,6 @@ func (p *PolicyConfig) Level3TimeoutDuration() time.Duration {
 		}
 	}
 	return DefaultLevel3Timeout
-}
-
-// DaemonConfig controls daemon behavior.
-type DaemonConfig struct {
-	// Enabled: nil = auto (try daemon, fall back to in-process),
-	// true = require daemon, false = always in-process.
-	Enabled     *bool  `yaml:"enabled"`
-	IdleTimeout string `yaml:"idle_timeout"`
-}
-
-// DefaultIdleTimeout is used when no idle_timeout is configured.
-const DefaultIdleTimeout = 5 * time.Minute
-
-// IdleTimeoutDuration parses the configured idle timeout or returns the default.
-func (d *DaemonConfig) IdleTimeoutDuration() time.Duration {
-	if d.IdleTimeout != "" {
-		dur, err := time.ParseDuration(d.IdleTimeout)
-		if err == nil {
-			return dur
-		}
-	}
-	return DefaultIdleTimeout
 }
 
 // TierConfig controls which safety tiers are enabled.

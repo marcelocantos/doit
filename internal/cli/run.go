@@ -99,22 +99,6 @@ func runShell(ctx context.Context, command string, stdin io.Reader, stdout, stde
 	return 2, err.Error()
 }
 
-// resolveError extracts an exit code from an error. For ExitError (command
-// exited with non-zero status), the code is propagated silently — the
-// command's own stderr output is sufficient. For other errors, doit reports
-// them on stderr.
-func resolveError(err error, stderr io.Writer) (exitCode int, errMsg string) {
-	if err == nil {
-		return 0, ""
-	}
-	var exitErr *builtin.ExitError
-	if errors.As(err, &exitErr) {
-		return exitErr.Code, ""
-	}
-	fmt.Fprintf(stderr, "doit: %v\n", err)
-	return 2, err.Error()
-}
-
 func logAudit(ctx context.Context, logger *audit.Logger, pipelineStr string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, retry bool, cwd string) {
 	if logger == nil {
 		return
