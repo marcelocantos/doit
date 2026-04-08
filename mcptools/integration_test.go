@@ -160,16 +160,8 @@ func TestIntegration_Execute_PolicyDeny(t *testing.T) {
 	}
 
 	text := extractText(t, result)
-	var resp map[string]any
-	if err := json.Unmarshal([]byte(text), &resp); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	pol, ok := resp["policy"].(map[string]any)
-	if !ok {
-		t.Fatal("expected policy in response")
-	}
-	if pol["decision"] != "deny" {
-		t.Errorf("expected deny, got %v", pol["decision"])
+	if !strings.Contains(text, "Denied by policy") {
+		t.Errorf("expected denial message, got %q", text)
 	}
 }
 

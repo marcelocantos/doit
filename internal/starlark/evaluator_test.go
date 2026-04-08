@@ -30,7 +30,7 @@ tests = [
 `)
 	eval := NewEvaluator([]*Rule{rule})
 
-	result, ruleID := eval.EvaluateCommand("rm", nil, false)
+	result, ruleID, _ := eval.EvaluateCommand("rm", nil, false)
 	if result == nil {
 		t.Fatal("expected deny result, got nil")
 	}
@@ -51,7 +51,7 @@ tests = [{"command": "x", "args": [], "expect": "escalate"}]
 `)
 	eval := NewEvaluator([]*Rule{rule})
 
-	result, ruleID := eval.EvaluateCommand("ls", nil, false)
+	result, ruleID, _ := eval.EvaluateCommand("ls", nil, false)
 	if result != nil {
 		t.Errorf("expected nil result, got %+v", result)
 	}
@@ -76,13 +76,13 @@ tests = [
 	eval := NewEvaluator([]*Rule{rule})
 
 	// Without retry: should deny.
-	result, _ := eval.EvaluateCommand("make", nil, false)
+	result, _, _ := eval.EvaluateCommand("make", nil, false)
 	if result == nil || result.Decision != "deny" {
 		t.Error("expected deny without retry")
 	}
 
 	// With retry: bypassable rule skipped.
-	result, _ = eval.EvaluateCommand("make", nil, true)
+	result, _, _ = eval.EvaluateCommand("make", nil, true)
 	if result != nil {
 		t.Errorf("expected nil with retry, got %+v", result)
 	}
@@ -113,7 +113,7 @@ tests = [
 `)
 	eval := NewEvaluator([]*Rule{rule1, rule2})
 
-	result, ruleID := eval.EvaluateCommand("x", nil, false)
+	result, ruleID, _ := eval.EvaluateCommand("x", nil, false)
 	if result == nil || result.Decision != "deny" {
 		t.Error("expected first rule to win with deny")
 	}
@@ -149,7 +149,7 @@ tests = [
 `)
 	eval := NewEvaluator([]*Rule{rule})
 
-	result, _ := eval.EvaluateCommand("ls", nil, false)
+	result, _, _ := eval.EvaluateCommand("ls", nil, false)
 	if result == nil || result.Decision != "allow" {
 		t.Error("expected allow result")
 	}

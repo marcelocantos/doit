@@ -71,7 +71,8 @@ func TestDryRun_DangerousCommand(t *testing.T) {
 
 func TestExecute_PolicyDeny(t *testing.T) {
 	eng := newTestEngine(t)
-	handler := handleExecute(eng)
+	srv := server.NewMCPServer("test", "0.0.1", server.WithElicitation())
+	handler := handleExecute(srv, eng)
 
 	result, err := handler(context.Background(), newCallReq("doit_execute", map[string]any{
 		"command": "rm -rf /",
@@ -83,22 +84,15 @@ func TestExecute_PolicyDeny(t *testing.T) {
 		t.Error("expected error result for denied command")
 	}
 	text := textContent(t, result)
-	var resp map[string]any
-	if err := json.Unmarshal([]byte(text), &resp); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
-	}
-	pol, ok := resp["policy"].(map[string]any)
-	if !ok {
-		t.Fatal("expected policy field in response")
-	}
-	if pol["decision"] != "deny" {
-		t.Errorf("expected policy deny, got %v", pol["decision"])
+	if !strings.Contains(text, "Denied by policy") {
+		t.Errorf("expected denial message, got %q", text)
 	}
 }
 
 func TestExecute_MissingCommand(t *testing.T) {
 	eng := newTestEngine(t)
-	handler := handleExecute(eng)
+	srv := server.NewMCPServer("test", "0.0.1", server.WithElicitation())
+	handler := handleExecute(srv, eng)
 
 	result, err := handler(context.Background(), newCallReq("doit_execute", map[string]any{}))
 	if err != nil {

@@ -18,21 +18,21 @@ func NewEvaluator(rules []*Rule) *Evaluator {
 // The first definitive result (allow or deny) wins.
 // If bypassable rules should be skipped (retry=true), they are skipped.
 // Returns nil if no rule has an opinion.
-func (e *Evaluator) EvaluateCommand(command string, args []string, retry bool) (*CheckResult, string) {
+func (e *Evaluator) EvaluateCommand(command string, args []string, retry bool) (result *CheckResult, ruleID string, bypassable bool) {
 	for _, rule := range e.rules {
 		if rule.Bypassable && retry {
 			continue
 		}
-		result, err := rule.Evaluate(command, args)
+		r, err := rule.Evaluate(command, args)
 		if err != nil {
 			// Rule evaluation error — treat as no opinion and continue.
 			continue
 		}
-		if result != nil {
-			return result, rule.ID
+		if r != nil {
+			return r, rule.ID, rule.Bypassable
 		}
 	}
-	return nil, ""
+	return nil, "", false
 }
 
 // Rules returns the loaded rules for inspection.

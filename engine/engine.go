@@ -65,12 +65,13 @@ type Result struct {
 
 // EvalResult is returned by Evaluate (dry-run, no execution).
 type EvalResult struct {
-	Decision string   // "allow", "deny", "escalate"
-	Level    int      // 1, 2, or 3
-	Reason   string   // human-readable explanation
-	RuleID   string   // which rule matched
-	Segments []string // capability names
-	Tiers    []string // tier of each segment
+	Decision   string   // "allow", "deny", "escalate"
+	Level      int      // 1, 2, or 3
+	Reason     string   // human-readable explanation
+	RuleID     string   // which rule matched
+	Bypassable bool     // true if the denial can be overridden by the user
+	Segments   []string // capability names
+	Tiers      []string // tier of each segment
 }
 
 // Engine wraps the doit policy chain, capability registry, and audit log.
@@ -217,12 +218,13 @@ func (e *Engine) Evaluate(ctx context.Context, req Request) *EvalResult {
 		}
 	}
 	return &EvalResult{
-		Decision: result.Decision.String(),
-		Level:    result.Level,
-		Reason:   result.Reason,
-		RuleID:   result.RuleID,
-		Segments: segments,
-		Tiers:    tiers,
+		Decision:   result.Decision.String(),
+		Level:      result.Level,
+		Reason:     result.Reason,
+		RuleID:     result.RuleID,
+		Bypassable: result.Bypassable,
+		Segments:   segments,
+		Tiers:      tiers,
 	}
 }
 
