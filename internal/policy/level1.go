@@ -171,7 +171,7 @@ func checkGitCheckoutAll(req *Request) *Result {
 				return &Result{
 					Decision: Deny,
 					Level:    1,
-					Reason:   "checkout: refusing to discard all changes (config rule). Ask the user for explicit permission, then retry with: doit --retry git checkout .",
+					Reason:   "checkout: refusing to discard all changes (config rule, bypassable)",
 					RuleID:   "deny-git-checkout-all",
 				}
 			}
@@ -181,7 +181,7 @@ func checkGitCheckoutAll(req *Request) *Result {
 					return &Result{
 						Decision: Deny,
 						Level:    1,
-						Reason:   "checkout: refusing to discard all changes (config rule). Ask the user for explicit permission, then retry with: doit --retry git checkout .",
+						Reason:   "checkout: refusing to discard all changes (config rule, bypassable)",
 						RuleID:   "deny-git-checkout-all",
 					}
 				}
@@ -232,7 +232,7 @@ func compileConfigRules(capName string, cfg rules.CapRuleConfig) []Rule {
 						return &Result{
 							Decision: Deny,
 							Level:    1,
-							Reason:   fmt.Sprintf("rejected flag for %s (config rule). Ask the user for explicit permission, then retry with: doit --retry %s ...", name, name),
+							Reason:   fmt.Sprintf("rejected flag for %s (config rule, bypassable)", name),
 							RuleID:   fmt.Sprintf("deny-%s-flags", name),
 						}
 					}
@@ -260,7 +260,7 @@ func compileConfigRules(capName string, cfg rules.CapRuleConfig) []Rule {
 							return &Result{
 								Decision: Deny,
 								Level:    1,
-								Reason:   fmt.Sprintf("%s: rejected flag for %s (config rule). Ask the user for explicit permission, then retry with: doit --retry %s ...", sub, name, name),
+								Reason:   fmt.Sprintf("%s: rejected flag for %s (config rule, bypassable)", sub, name),
 								RuleID:   fmt.Sprintf("deny-%s-%s-flags", name, sub),
 							}
 						}

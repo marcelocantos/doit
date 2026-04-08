@@ -25,7 +25,7 @@ def check(command, args):
     if has_any_flag(args[1:], ["--hard"]):
         return {
             "decision": "deny",
-            "reason": "reset: rejected --hard flag for git (config rule). Ask the user for explicit permission, then retry with: doit --retry git ...",
+            "reason": "reset: rejected --hard flag for git (config rule). config rule, bypassable",
         }
     return None
 

@@ -14,7 +14,7 @@ def check(command, args):
         if arg == "." or arg == "./":
             return {
                 "decision": "deny",
-                "reason": "checkout: refusing to discard all changes (config rule). Ask the user for explicit permission, then retry with: doit --retry git checkout .",
+                "reason": "checkout: refusing to discard all changes (config rule). config rule, bypassable",
             }
         # "-- ." pattern
         if arg == "--" and i + 1 < len(args[1:]):
@@ -22,7 +22,7 @@ def check(command, args):
             if next_arg == "." or next_arg == "./":
                 return {
                     "decision": "deny",
-                    "reason": "checkout: refusing to discard all changes (config rule). Ask the user for explicit permission, then retry with: doit --retry git checkout .",
+                    "reason": "checkout: refusing to discard all changes (config rule). config rule, bypassable",
                 }
     return None
 

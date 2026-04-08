@@ -1,0 +1,55 @@
+targets:
+  T1:
+    name: MCP-first architecture
+    status: achieved
+    value: 5.0
+    cost: 1.0
+    acceptance:
+    - TODO
+    origin: manual
+    discovered: 2026-04-09
+  T2:
+    name: sh -c execution model
+    status: achieved
+    value: 4.0
+    cost: 1.0
+    acceptance:
+    - TODO
+    origin: manual
+    discovered: 2026-04-09
+  T3:
+    name: Starlark L1 rules
+    status: achieved
+    value: 3.0
+    cost: 2.0
+    acceptance:
+    - TODO
+    origin: manual
+    discovered: 2026-04-09
+  T4:
+    name: Per-project policy
+    status: achieved
+    value: 2.0
+    cost: 1.0
+    acceptance:
+    - TODO
+    origin: manual
+    discovered: 2026-04-09
+  T5:
+    name: Test coverage for core packages
+    status: achieved
+    value: 3.0
+    cost: 1.0
+    acceptance:
+    - TODO
+    origin: manual
+    discovered: 2026-04-09
+  T6:
+    name: Clean up legacy code paths
+    status: achieved
+    value: 1.0
+    cost: 1.0
+    acceptance:
+    - TODO
+    origin: manual
+    discovered: 2026-04-09

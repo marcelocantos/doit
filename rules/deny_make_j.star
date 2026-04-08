@@ -27,7 +27,7 @@ def check(command, args):
     if has_any_flag(args, ["-j"]):
         return {
             "decision": "deny",
-            "reason": "rejected -j flag for make (config rule). Ask the user for explicit permission, then retry with: doit --retry make ...",
+            "reason": "rejected -j flag for make (config rule). config rule, bypassable",
         }
     return None
 

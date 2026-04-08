@@ -32,7 +32,7 @@ def check(command, args):
     if has_any_flag(args[1:], ["--force", "-f", "--force-with-lease"]):
         return {
             "decision": "deny",
-            "reason": "push: rejected force flag for git (config rule). Ask the user for explicit permission, then retry with: doit --retry git ...",
+            "reason": "push: rejected force flag for git (config rule). config rule, bypassable",
         }
     return None
 

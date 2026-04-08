@@ -1,59 +1,37 @@
 # doit — Agent Usage Guide
 
-You are using `doit`, a capability broker that mediates command execution.
-Add `Bash(doit:*)` to your allow list and use `doit` for all shell operations.
+doit is an MCP server that mediates command execution through a three-level
+policy engine. All commands are executed via MCP tools — there is no CLI
+interface for command execution.
 
-## Direct execution
+## MCP tools
 
-Run a single capability:
+| Tool | Purpose |
+|---|---|
+| `doit_execute` | Execute a command through the policy engine |
+| `doit_dry_run` | Evaluate a command without executing (policy check only) |
+| `doit_policy_status` | Show policy engine state (enabled levels, rule counts) |
+| `doit_approve` | Validate an approval token for escalated commands |
+| `doit_list_capabilities` | List registered capabilities and their tiers |
+| `doit_audit_verify` | Verify audit log hash chain integrity |
+| `doit_audit_tail` | Show recent audit log entries |
 
-    doit <capability> [args...]
+## Executing commands
 
-Examples:
+Use `doit_execute` for all command execution. Commands are passed as shell
+strings and executed via `sh -c`:
 
-    doit grep -r TODO src/
-    doit ls -la
-    doit git status
-    doit head -20 README.md
+```json
+{"command": "git status", "cwd": "/path/to/repo"}
+{"command": "grep -r TODO src/", "justification": "searching for open items"}
+```
 
-## Pipelines
+Shell features (pipes, redirects, `&&`, `||`) work naturally:
 
-Use the `¦` (U+00A6 BROKEN BAR) operator to chain capabilities.
-No quoting is needed — these are not shell metacharacters.
-
-    doit <cmd> [args...] ¦ <cmd> [args...] ¦ ...
-
-Examples:
-
-    doit grep -r TODO src/ ¦ head -20
-    doit git log --oneline ¦ grep fix ¦ head -5
-    doit cat file.txt ¦ sort ¦ uniq -c
-
-## Redirects
-
-Use `›` (U+203A) to redirect stdout to a file and `‹` (U+2039) to redirect
-stdin from a file. These can appear anywhere in the argument list.
-
-    doit grep -r TODO src/ ¦ sort › /tmp/results.txt
-    doit sort ‹ /tmp/input.txt ¦ uniq -c
-
-## Compound commands
-
-Use compound operators to chain pipelines conditionally:
-
-- `＆＆` (and-then): run the next pipeline only if the previous succeeded
-- `‖` (or-else): run the next pipeline only if the previous failed
-- `；` (sequential): run the next pipeline regardless of exit code
-
-    doit make build ＆＆ git add -A
-    doit make build ‖ cat build-failed.txt
-    doit git add -A ；git commit -m "auto"
-
-Compound operators chain whole pipelines. Pipes and redirects scope to each
-pipeline section:
-
-    doit grep TODO src/ ¦ wc -l ＆＆ cat ok.txt
-    doit sort ‹ input.txt › sorted.txt ＆＆ head -5 ‹ sorted.txt
+```json
+{"command": "grep -r TODO src/ | head -20"}
+{"command": "make build && git add -A"}
+```
 
 ## Safety tiers
 
@@ -61,53 +39,42 @@ Each capability has a safety tier: read, build, write, or dangerous.
 Dangerous-tier capabilities (rm, chmod, git push) are disabled by default.
 If a command is rejected due to its tier, do not attempt to bypass it.
 
-    doit --list                  # show all capabilities and their tiers
-    doit --list --tier read      # show only read-tier capabilities
+Use `doit_list_capabilities` to see all capabilities and their tiers.
 
-## Rule bypass with --retry
+## Policy decisions via elicitation
 
-Some commands are blocked by config rules (e.g., `make -j`, `git push --force`,
-`git checkout .`). When blocked, the error message will tell you how to retry
-with `--retry`. Only do this after the user has explicitly approved the operation.
+When the policy engine blocks a bypassable rule or escalates a decision,
+doit presents an interactive dialog to the user with four options:
 
-    doit --retry make -j4 all
-    doit --retry git push --force origin master
-    doit --retry git checkout .
-    doit --retry make -j4 ＆＆ git push --force
+- **Allow once** — execute this command, no policy change
+- **Allow always** — execute and record the decision for future matching
+- **Deny** — don't execute
+- **Deny always** — don't execute and record the decision
 
-The `--retry` flag:
-- Only bypasses config-based rules, never hardcoded safety rules
-- Only applies to a single invocation
-- Is recorded in the audit log
+After "Allow always" or "Deny always", a follow-up dialog may propose
+creating a permanent Starlark rule at varying generality levels.
 
-### Four types of denials
+### Three types of denials
 
-1. **Tier denied** — The capability's tier (e.g., dangerous) is disabled.
-   Do not retry. This cannot be bypassed.
-2. **Hardcoded rule** — A safety rule permanently blocks the operation
-   (e.g., `rm -rf /`). Do not retry. This cannot be bypassed.
-3. **Config rule** — A configurable rule blocks the operation (e.g.,
-   `make -j`, `git push --force`, `git checkout .`). Ask the user for
-   permission, then retry with `doit --retry <cap> [args...]`.
-4. **Policy escalation** — The LLM gatekeeper couldn't decide and needs
-   human review. The error output includes reasoning. Present it to the
-   user and ask whether to proceed. If they approve, retry with
-   `doit --retry <cap> [args...]`.
+1. **Hardcoded rule** — A safety rule permanently blocks the operation
+   (e.g., `rm -rf /`). Cannot be bypassed. Do not retry.
+2. **Config rule** — A configurable rule blocks the operation (e.g.,
+   `make -j`, `git push --force`). The user will be prompted to
+   override via elicitation.
+3. **Policy escalation** — The policy engine needs human review. The
+   user will be prompted with the policy reasoning and options.
 
 ## Audit log
 
-All invocations are logged to a tamper-evident audit trail. Do not attempt
-to modify or delete the audit log.
-
-    doit --audit show            # view recent entries
-    doit --audit verify          # check log integrity
+All invocations are logged to a tamper-evident audit trail (SHA-256 hash
+chain). Use `doit_audit_verify` to check integrity and `doit_audit_tail`
+to view recent entries.
 
 ## Important rules
 
-1. Always use `doit` instead of running commands directly.
-2. Use `¦` for pipelines instead of shell `|`.
-3. Use `›` and `‹` for redirects instead of shell `>` and `<`.
-4. Respect tier denials and hardcoded blocks — do not retry.
-   Config rule blocks can be retried with `--retry` after user approval.
-5. Use `doit --list` to discover available capabilities.
+1. Always use `doit_execute` instead of running commands directly.
+2. Respect hardcoded denials — do not retry.
+3. For config rule denials, the user will be prompted automatically.
+4. Use `doit_dry_run` to check policy before executing if uncertain.
+5. Use `doit_list_capabilities` to discover available capabilities.
 6. Every invocation is audited. Work transparently.

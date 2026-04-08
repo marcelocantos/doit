@@ -28,12 +28,12 @@ func CheckGitCheckoutAll(capName string, args []string) error {
 	for i, arg := range args[1:] {
 		cleaned := filepath.Clean(arg)
 		if cleaned == "." {
-			return fmt.Errorf("checkout: refusing to discard all changes (config rule). Ask the user for explicit permission, then retry with: doit --retry git checkout .")
+			return fmt.Errorf("checkout: refusing to discard all changes (config rule, bypassable)")
 		}
 		if arg == "--" && i+1 < len(args[1:]) {
 			next := filepath.Clean(args[i+2])
 			if next == "." {
-				return fmt.Errorf("checkout: refusing to discard all changes (config rule). Ask the user for explicit permission, then retry with: doit --retry git checkout .")
+				return fmt.Errorf("checkout: refusing to discard all changes (config rule, bypassable)")
 			}
 		}
 	}

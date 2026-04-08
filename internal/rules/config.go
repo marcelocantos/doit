@@ -29,7 +29,7 @@ func CompileCapRule(capName string, cfg CapRuleConfig) []CheckFunc {
 				return nil
 			}
 			if HasAnyFlag(args, flags...) {
-				return fmt.Errorf("rejected flag (config rule). Ask the user for explicit permission, then retry with: doit --retry %s ...", name)
+				return fmt.Errorf("rejected flag for %s (config rule, bypassable)", name)
 			}
 			return nil
 		})
@@ -46,7 +46,7 @@ func CompileCapRule(capName string, cfg CapRuleConfig) []CheckFunc {
 					return nil
 				}
 				if HasAnyFlag(args[1:], flags...) {
-					return fmt.Errorf("%s: rejected flag (config rule). Ask the user for explicit permission, then retry with: doit --retry %s ...", sub, name)
+					return fmt.Errorf("%s: rejected flag for %s (config rule, bypassable)", sub, name)
 				}
 				return nil
 			})
