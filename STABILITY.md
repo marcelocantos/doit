@@ -5,7 +5,7 @@ breaking changes to the public API, MCP interface, configuration format,
 audit log format, or Starlark rule contract will require a major version
 bump. The pre-1.0 period exists to get these right.
 
-Snapshot as of v0.3.0.
+Snapshot as of v0.4.0.
 
 ## Interaction surface catalogue
 

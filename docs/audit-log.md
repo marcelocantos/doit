@@ -55,7 +55,14 @@ maintenance activities. Append-only — newest entries at the bottom.
 
 ## 2026-04-09 — /release v0.3.0
 
-- **Commit**: `(pending)`
+- **Commit**: `d94df09`
 - **Outcome**: Released v0.3.0 (darwin-arm64, linux-amd64, linux-arm64).
   Single binary consolidation, MCP elicitation for policy decisions,
   two-phase rule promotion, admin MCP tools. Homebrew formula updated.
+
+## 2026-04-09 — /release v0.4.0
+
+- **Commit**: `(pending)`
+- **Outcome**: Released v0.4.0 (darwin-arm64, linux-amd64, linux-arm64).
+  Fixed stale --retry references in error messages, rewrote agents-guide
+  and README for MCP-first model. Homebrew formula updated.
