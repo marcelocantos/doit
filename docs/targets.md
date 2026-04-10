@@ -10,8 +10,8 @@
   - Conditional branching detection identifies same command approved/denied based on different flags
   - Stable L3 patterns are proposed as L2 entries for human approval via elicitation
   - Auto-promotion runs after L3 decisions (tryPromote already exists, needs elicitation integration)
-- **Context**: The tryPromote mechanism exists but uses audit log analysis without semantic understanding. Needs to detect patterns like 'go test with any args is always allowed' and propose them as L2 entries.
-- **Tags**: policy
+- **Context**: The claudia session (🎯T8) can analyse L3 decision history for patterns. Instead of simple audit log analysis, the agent uses semantic understanding to cluster similar decisions and propose L2 entries. Runs as a periodic task within the existing claudia session.
+- **Tags**: policy, claudia
 - **Origin**: roadmap — docs/todo.md Policy Migration
 - **Status**: Identified
 - **Discovered**: 2026-04-10
@@ -38,8 +38,8 @@
   - Flags rules that have drifted from current project reality
   - Identifies L3 patterns that should have been promoted but weren't
   - Surfaces inconsistencies between L1 Starlark rules and L2 learned entries
-- **Context**: As the rule set grows through L3→L1 promotion, there's no mechanism to check that the accumulated rules still make sense together. A self-audit catches the combinatorial risks that individual rule reviews miss.
-- **Tags**: policy, safety
+- **Context**: The claudia session (🎯T8) can perform holistic rule set review. The agent reads all L1 Starlark rules and L2 entries, reasons about interactions, and flags dangerous combinations or drift. Runs as a periodic or on-demand task.
+- **Tags**: policy, safety, claudia
 - **Origin**: roadmap — docs/todo.md Gatekeeper Self-Audit
 - **Status**: Identified
 - **Discovered**: 2026-04-10
@@ -58,17 +58,17 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-10
 
-### 🎯T14 Session-scoped gatekeeper agent triages requests with work context
+### 🎯T14 Session-scoped gatekeeper uses claudia for context-aware triage
 - **Value**: 5
-- **Cost**: 5
+- **Cost**: 3
 - **Acceptance**:
-  - Worker can introduce a work session with description and scope
-  - doit spawns a context-aware evaluation agent for that session
-  - Session agent makes faster, more informed L3 decisions using work context
+  - Worker can introduce a work session via doit_execute metadata (scope, description)
+  - Session context persists across evaluations within a declared work session (no /clear)
+  - Session agent makes faster, more informed decisions using accumulated work context
   - Session agent can pre-approve patterns within the declared scope
-  - Session ends when worker signals completion or timeout
-- **Context**: The most ambitious design doc idea. Instead of evaluating each command in isolation, a session-scoped agent understands what the worker is trying to accomplish and can make better allow/deny decisions. Reduces escalation noise for legitimate work while catching out-of-scope operations.
-- **Tags**: policy, agent
+  - Session ends on worker signal or timeout, resuming per-command /clear behavior
+- **Context**: With L3 already running as a persistent claudia session (🎯T8), the session agent becomes an extension: workers can introduce a work session with scope/description, and the existing claudia session accumulates that context across evaluations (skip /clear for within-session commands). This builds on top of the L3 claudia integration rather than being a separate system.
+- **Tags**: policy, agent, claudia
 - **Origin**: roadmap — docs/todo.md Gatekeeper Capabilities
 - **Status**: Identified
 - **Discovered**: 2026-04-10
@@ -114,16 +114,19 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-10
 
-### 🎯T8 L3 LLM evaluation works end-to-end with elicitation
+### 🎯T8 L3 evaluation runs as a persistent claudia session
 - **Value**: 5
 - **Cost**: 3
 - **Acceptance**:
-  - L3 enabled in config triggers LLM evaluation for commands that L1/L2 don't match
-  - L3 escalation fires MCP elicitation with Allow once/always, Deny/always options
-  - L3 deny includes LLM reasoning in the elicitation message
+  - doit imports claudia as a Go library dependency
+  - Engine.New starts a persistent claudia session when L3 is enabled
+  - L3 evaluation sends a structured prompt to the claudia session and parses the response
+  - Session /clear runs between evaluations to prevent context cross-contamination
+  - L3 escalation fires MCP elicitation with the agent's reasoning
   - L3 decisions are recorded in audit log with level=3
-- **Context**: L3 is wired up but never tested end-to-end with the new elicitation flow. The LLM client exists but the integration path through elicitation needs validation. STABILITY.md 1.0 gap.
-- **Tags**: policy, llm
+  - Session is gracefully shut down when the engine stops
+- **Context**: Instead of a raw LLM API client, L3 uses a persistent claudia session (github.com/marcelocantos/claudia). The session starts with the engine and persists for its lifetime. Each evaluation sends a prompt, gets a decision, then /clear resets context. This gives L3 full Claude Code capabilities (file reading, project context) while maintaining clean evaluation boundaries. Collapses the old L3-as-API-call and session-agent concepts into one architecture.
+- **Tags**: policy, llm, claudia
 - **Origin**: roadmap — STABILITY.md 1.0 gap
 - **Status**: Identified
 - **Discovered**: 2026-04-10
@@ -136,8 +139,8 @@
   - Generated Starlark rules handle edge cases (combined flags, flag=value syntax)
   - Generated rules include comprehensive test cases covering allow and deny paths
   - ProposeRules uses command semantics (not just string splitting) to determine generality levels
-- **Context**: Current ProposeRules uses simple string splitting on the command. L3 has richer context about why a command was allowed/denied. Using L3 to propose rules would produce better generalizations. STABILITY.md gap: elicitation phase 2 maturity.
-- **Tags**: policy, starlark
+- **Context**: With L3 running as a claudia session, rule promotion can leverage the agent's full reasoning capability. Instead of simple string splitting, the claudia session generates Starlark rules with semantic understanding of the command, its flags, and the project context. The agent proposes rules at varying generality levels for the phase 2 elicitation.
+- **Tags**: policy, starlark, claudia
 - **Origin**: roadmap — STABILITY.md 1.0 gap
 - **Status**: Identified
 - **Discovered**: 2026-04-10
@@ -194,10 +197,10 @@ graph TD
     T11["Spaced repetition review keep…"]
     T12["Gatekeeper self-audit detects…"]
     T13["Project context auto-discover…"]
-    T14["Session-scoped gatekeeper age…"]
+    T14["Session-scoped gatekeeper use…"]
     T15["Gatekeeper has read-only repo…"]
     T16["doit is the sole execution pa…"]
     T7["L2 policy store has an MCP ma…"]
-    T8["L3 LLM evaluation works end-t…"]
+    T8["L3 evaluation runs as a persi…"]
     T9["Rule promotion generates high…"]
 ```
