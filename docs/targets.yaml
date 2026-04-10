@@ -8,6 +8,117 @@ targets:
     - TODO
     origin: manual
     discovered: 2026-04-09
+  T10:
+    name: L3→L2 auto-promotion detects stable patterns from decision history
+    status: identified
+    value: 3.0
+    cost: 3.0
+    acceptance:
+    - Semantic similarity grouping clusters similar L3 decisions (e.g., go test ./... variants)
+    - Conditional branching detection identifies same command approved/denied based on different flags
+    - Stable L3 patterns are proposed as L2 entries for human approval via elicitation
+    - Auto-promotion runs after L3 decisions (tryPromote already exists, needs elicitation integration)
+    context: The tryPromote mechanism exists but uses audit log analysis without semantic understanding. Needs to detect patterns like 'go test with any args is always allowed' and propose them as L2 entries.
+    tags:
+    - policy
+    origin: roadmap — docs/todo.md Policy Migration
+    discovered: 2026-04-10
+  T11:
+    name: Spaced repetition review keeps learned policy fresh
+    status: identified
+    value: 3.0
+    cost: 2.0
+    acceptance:
+    - L2 entries have ReviewSchedule with next_review dates
+    - Overdue entries are surfaced via doit_policy_status or a dedicated review tool
+    - 'Review elicitation presents the entry and asks: keep, modify, or remove'
+    - Review intervals use spaced repetition (increasing intervals after each confirmation)
+    context: 'L2 entries have ReviewSchedule fields but review is never triggered. Without periodic review, learned policy accumulates stale entries that don''t reflect current project reality. Design doc section: Spaced Repetition Review.'
+    tags:
+    - policy
+    origin: roadmap — design doc
+    discovered: 2026-04-10
+  T12:
+    name: Gatekeeper self-audit detects dangerous rule combinations and drift
+    status: identified
+    value: 2.0
+    cost: 3.0
+    acceptance:
+    - Periodic audit detects rules that are dangerous in combination
+    - Flags rules that have drifted from current project reality
+    - Identifies L3 patterns that should have been promoted but weren't
+    - Surfaces inconsistencies between L1 Starlark rules and L2 learned entries
+    context: As the rule set grows through L3→L1 promotion, there's no mechanism to check that the accumulated rules still make sense together. A self-audit catches the combinatorial risks that individual rule reviews miss.
+    tags:
+    - policy
+    - safety
+    origin: roadmap — docs/todo.md Gatekeeper Self-Audit
+    discovered: 2026-04-10
+  T13:
+    name: Project context auto-discovery informs policy decisions
+    status: identified
+    value: 3.0
+    cost: 2.0
+    acceptance:
+    - Engine discovers project type from Makefile, go.mod, package.json, etc.
+    - Project context influences L1/L2 evaluation (e.g., Go project allows go test)
+    - CLAUDE.md is parsed for doit-relevant configuration hints
+    - Context is passed to L3 for informed reasoning about command safety
+    context: 'Currently doit treats all commands the same regardless of project context. A Go project should auto-allow go test, a Node project should allow npm test. Per-project config handles explicit rules but auto-discovery handles the common case. Design doc section: Global vs Repo-Level Policy.'
+    tags:
+    - policy
+    - context
+    origin: roadmap — docs/todo.md Global vs Repo-Level Policy
+    discovered: 2026-04-10
+  T14:
+    name: Session-scoped gatekeeper agent triages requests with work context
+    status: identified
+    value: 5.0
+    cost: 5.0
+    acceptance:
+    - Worker can introduce a work session with description and scope
+    - doit spawns a context-aware evaluation agent for that session
+    - Session agent makes faster, more informed L3 decisions using work context
+    - Session agent can pre-approve patterns within the declared scope
+    - Session ends when worker signals completion or timeout
+    context: The most ambitious design doc idea. Instead of evaluating each command in isolation, a session-scoped agent understands what the worker is trying to accomplish and can make better allow/deny decisions. Reduces escalation noise for legitimate work while catching out-of-scope operations.
+    tags:
+    - policy
+    - agent
+    origin: roadmap — docs/todo.md Gatekeeper Capabilities
+    discovered: 2026-04-10
+  T15:
+    name: Gatekeeper has read-only repo access for claim verification
+    status: identified
+    value: 2.0
+    cost: 2.0
+    acceptance:
+    - Gatekeeper can read .gitignore to verify 'generated directory' claims
+    - Gatekeeper can read build config to verify build-related command justifications
+    - Read-only access is enforced — gatekeeper cannot modify the repo
+    - Hardcoded allowlist governs which files the gatekeeper can read
+    context: When an agent claims 'this directory is generated, safe to delete', the gatekeeper currently takes it at face value. With repo access, it can verify claims against .gitignore, build configs, etc.
+    tags:
+    - policy
+    - safety
+    origin: roadmap — docs/todo.md Gatekeeper Capabilities
+    discovered: 2026-04-10
+  T16:
+    name: doit is the sole execution path — agents have no direct Bash access
+    status: identified
+    value: 8.0
+    cost: 2.0
+    acceptance:
+    - Documentation and agents-guide instruct agents to use only doit_execute
+    - Claude Code permission config denies Bash and routes through doit MCP tools
+    - Worker CLAUDE.md audit tool verifies doit routing is configured correctly
+    - Agents that attempt direct Bash are detected and flagged
+    context: The entire security model depends on doit being the sole execution path. If an agent can bypass doit via direct Bash, all policy enforcement is theatre. This is about ensuring the deployment configuration enforces the architecture.
+    tags:
+    - safety
+    - deployment
+    origin: roadmap — design doc core principle
+    discovered: 2026-04-10
   T2:
     name: sh -c execution model
     status: achieved
@@ -53,3 +164,50 @@ targets:
     - TODO
     origin: manual
     discovered: 2026-04-09
+  T7:
+    name: L2 policy store has an MCP management tool
+    status: identified
+    value: 5.0
+    cost: 2.0
+    acceptance:
+    - doit_policy_list MCP tool shows L2 entries with match criteria, decision, provenance, and review status
+    - doit_policy_delete MCP tool removes an L2 entry by ID
+    - doit_policy_status reports L2 entry count
+    context: Users cannot currently inspect or manage L2 learned policy entries. The only way to see what's been learned is to read the YAML file directly. This is a 1.0 prerequisite (STABILITY.md gap).
+    tags:
+    - policy
+    - mcp
+    origin: roadmap — STABILITY.md 1.0 gap
+    discovered: 2026-04-10
+  T8:
+    name: L3 LLM evaluation works end-to-end with elicitation
+    status: identified
+    value: 5.0
+    cost: 3.0
+    acceptance:
+    - L3 enabled in config triggers LLM evaluation for commands that L1/L2 don't match
+    - L3 escalation fires MCP elicitation with Allow once/always, Deny/always options
+    - L3 deny includes LLM reasoning in the elicitation message
+    - L3 decisions are recorded in audit log with level=3
+    context: L3 is wired up but never tested end-to-end with the new elicitation flow. The LLM client exists but the integration path through elicitation needs validation. STABILITY.md 1.0 gap.
+    tags:
+    - policy
+    - llm
+    origin: roadmap — STABILITY.md 1.0 gap
+    discovered: 2026-04-10
+  T9:
+    name: Rule promotion generates high-quality Starlark from L3 context
+    status: identified
+    value: 3.0
+    cost: 3.0
+    acceptance:
+    - Phase 2 elicitation rule proposals include L3 reasoning context
+    - Generated Starlark rules handle edge cases (combined flags, flag=value syntax)
+    - Generated rules include comprehensive test cases covering allow and deny paths
+    - ProposeRules uses command semantics (not just string splitting) to determine generality levels
+    context: 'Current ProposeRules uses simple string splitting on the command. L3 has richer context about why a command was allowed/denied. Using L3 to propose rules would produce better generalizations. STABILITY.md gap: elicitation phase 2 maturity.'
+    tags:
+    - policy
+    - starlark
+    origin: roadmap — STABILITY.md 1.0 gap
+    discovered: 2026-04-10
