@@ -169,7 +169,7 @@ targets:
     discovered: 2026-04-09
   T7:
     name: L2 policy store has an MCP management tool
-    status: identified
+    status: achieved
     value: 5.0
     cost: 2.0
     acceptance:
@@ -182,6 +182,7 @@ targets:
     - mcp
     origin: roadmap — STABILITY.md 1.0 gap
     discovered: 2026-04-10
+    achieved: 2026-04-10
   T8:
     name: L3 evaluation runs as a persistent claudia session
     status: identified

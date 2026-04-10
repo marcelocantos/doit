@@ -101,19 +101,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-10
 
-### 🎯T7 L2 policy store has an MCP management tool
-- **Value**: 5
-- **Cost**: 2
-- **Acceptance**:
-  - doit_policy_list MCP tool shows L2 entries with match criteria, decision, provenance, and review status
-  - doit_policy_delete MCP tool removes an L2 entry by ID
-  - doit_policy_status reports L2 entry count
-- **Context**: Users cannot currently inspect or manage L2 learned policy entries. The only way to see what's been learned is to read the YAML file directly. This is a 1.0 prerequisite (STABILITY.md gap).
-- **Tags**: policy, mcp
-- **Origin**: roadmap — STABILITY.md 1.0 gap
-- **Status**: Identified
-- **Discovered**: 2026-04-10
-
 ### 🎯T8 L3 evaluation runs as a persistent claudia session
 - **Value**: 5
 - **Cost**: 3
@@ -146,6 +133,20 @@
 - **Discovered**: 2026-04-10
 
 ## Achieved
+
+### 🎯T7 L2 policy store has an MCP management tool
+- **Value**: 5
+- **Cost**: 2
+- **Acceptance**:
+  - doit_policy_list MCP tool shows L2 entries with match criteria, decision, provenance, and review status
+  - doit_policy_delete MCP tool removes an L2 entry by ID
+  - doit_policy_status reports L2 entry count
+- **Context**: Users cannot currently inspect or manage L2 learned policy entries. The only way to see what's been learned is to read the YAML file directly. This is a 1.0 prerequisite (STABILITY.md gap).
+- **Tags**: policy, mcp
+- **Origin**: roadmap — STABILITY.md 1.0 gap
+- **Status**: Achieved
+- **Discovered**: 2026-04-10
+- **Achieved**: 2026-04-10
 
 ### 🎯T1 MCP-first architecture
 - **Value**: 5
@@ -200,7 +201,6 @@ graph TD
     T14["Session-scoped gatekeeper use…"]
     T15["Gatekeeper has read-only repo…"]
     T16["doit is the sole execution pa…"]
-    T7["L2 policy store has an MCP ma…"]
     T8["L3 evaluation runs as a persi…"]
     T9["Rule promotion generates high…"]
 ```

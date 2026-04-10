@@ -21,6 +21,11 @@ func NewLevel2(entries []PolicyEntry) *Level2 {
 	return &Level2{entries: entries}
 }
 
+// EntryCount returns the number of loaded policy entries.
+func (l *Level2) EntryCount() int {
+	return len(l.entries)
+}
+
 // Evaluate runs per-segment matching against the learned policy store.
 //
 // When req.Retry is true, Level 2 is bypassed entirely (returns Escalate).

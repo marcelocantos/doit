@@ -401,6 +401,7 @@ func (e *Engine) PolicyStatus() map[string]any {
 	e.l2Mu.RLock()
 	if e.policyL2 != nil {
 		status["l2_loaded"] = true
+		status["l2_entries"] = e.policyL2.EntryCount()
 	}
 	e.l2Mu.RUnlock()
 
@@ -435,6 +436,11 @@ func (e *Engine) ListCapabilities() []CapabilityInfo {
 // AuditPath returns the configured audit log path.
 func (e *Engine) AuditPath() string {
 	return e.cfg.Audit.Path
+}
+
+// StorePath returns the L2 policy store path.
+func (e *Engine) StorePath() string {
+	return e.storePath
 }
 
 // StarlarkRulesDir returns the configured Starlark rules directory.
