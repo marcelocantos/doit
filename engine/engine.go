@@ -100,6 +100,7 @@ type Engine struct {
 	policyL3   *policy.Level3
 	l3Fast     *llm.ClaudiaClient // fast triage session (sonnet)
 	l3Deep     *llm.ClaudiaClient // deep reasoning session (opus) — may be nil
+	l3Ready    chan struct{}       // closed when background L3 init completes
 	tokenStore *policy.TokenStore
 	storePath  string
 	promoteCh  chan struct{}
@@ -221,44 +222,52 @@ func New(opts Options, engineOpts ...EngineOption) (*Engine, error) {
 	}
 
 	// L3: LLM gatekeeper (two-tier claudia sessions: fast + deep).
+	// Sessions start in the background so the MCP server is available
+	// immediately. L3 evaluations return Escalate until init completes.
 	if cfg.Policy.Level3Enabled {
-		workDir := opts.ProjectRoot
-		if workDir == "" {
-			workDir, _ = os.Getwd()
-		}
-		timeout := cfg.Policy.Level3TimeoutDuration()
+		e.l3Ready = make(chan struct{})
+		e.tokenStore = policy.NewTokenStore(policy.DefaultTokenTTL)
 
-		// Fast tier (sonnet by default).
-		fastModel := cfg.Policy.Level3FastModel
-		if fastModel == "" {
-			fastModel = "sonnet"
-		}
-		fastClient := llm.NewClaudiaClient(fastModel, workDir, timeout)
-		if err := fastClient.Start(); err != nil {
-			log.Printf("doit: engine: L3 fast session (%s): %v (L3 disabled)", fastModel, err)
-		} else {
+		go func() {
+			defer close(e.l3Ready)
+
+			workDir := opts.ProjectRoot
+			if workDir == "" {
+				workDir, _ = os.Getwd()
+			}
+			timeout := cfg.Policy.Level3TimeoutDuration()
+
+			fastModel := cfg.Policy.Level3FastModel
+			if fastModel == "" {
+				fastModel = "sonnet"
+			}
+			log.Printf("doit: starting L3 fast session (%s)", fastModel)
+			fastClient := llm.NewClaudiaClient(fastModel, workDir, timeout)
+			if err := fastClient.Start(); err != nil {
+				log.Printf("doit: L3 fast session (%s): %v (L3 disabled)", fastModel, err)
+				return
+			}
 			e.l3Fast = fastClient
 
-			// Deep tier (opus by default) — optional.
 			deepModel := cfg.Policy.Level3Model
 			if deepModel == "" {
 				deepModel = "opus"
 			}
 			if deepModel != fastModel {
+				log.Printf("doit: starting L3 deep session (%s)", deepModel)
 				deepClient := llm.NewClaudiaClient(deepModel, workDir, timeout)
 				if err := deepClient.Start(); err != nil {
-					log.Printf("doit: engine: L3 deep session (%s): %v (using fast model only)", deepModel, err)
+					log.Printf("doit: L3 deep session (%s): %v (fast model only)", deepModel, err)
 					e.policyL3 = policy.NewLevel3(fastClient)
 				} else {
 					e.l3Deep = deepClient
 					e.policyL3 = policy.NewLevel3(fastClient, deepClient)
 				}
 			} else {
-				// Same model for both tiers — single-tier mode.
 				e.policyL3 = policy.NewLevel3(fastClient)
 			}
-			e.tokenStore = policy.NewTokenStore(policy.DefaultTokenTTL)
-		}
+			log.Printf("doit: L3 ready")
+		}()
 	}
 
 	for _, opt := range engineOpts {
@@ -1144,6 +1153,10 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 	}
 
 	// L3: LLM evaluation (claudia session).
+	// Wait for background init if still in progress.
+	if result.Decision == policy.Escalate && e.l3Ready != nil {
+		<-e.l3Ready
+	}
 	if result.Decision == policy.Escalate && e.policyL3 != nil {
 		log.Printf("doit: L3 LLM call starting for %q", policyReq.Command)
 		t0 := time.Now()
