@@ -3,7 +3,7 @@ module github.com/marcelocantos/doit
 go 1.26.1
 
 require (
-	github.com/marcelocantos/claudia v0.3.0
+	github.com/marcelocantos/claudia v0.4.0
 	github.com/mark3labs/mcp-go v0.47.0
 	go.starlark.net v0.0.0-20260326113308-fadfc96def35
 	gopkg.in/yaml.v3 v3.0.1
