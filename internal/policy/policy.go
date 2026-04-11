@@ -49,6 +49,7 @@ type Request struct {
 	HasRedirectOut bool   // whether the pipeline has output redirect
 	Justification  string // why the worker needs this command
 	SafetyArg      string // why the worker believes it's safe
+	ProjectType    string // project type discovered from context (e.g. "go", "node")
 }
 
 // Segment mirrors pipeline.Segment for policy evaluation.

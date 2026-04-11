@@ -24,6 +24,7 @@ import (
 	"github.com/marcelocantos/doit/internal/cap"
 	"github.com/marcelocantos/doit/internal/cap/builtin"
 	"github.com/marcelocantos/doit/internal/config"
+	doitctx "github.com/marcelocantos/doit/internal/context"
 	"github.com/marcelocantos/doit/internal/llm"
 	"github.com/marcelocantos/doit/internal/pipeline"
 	"github.com/marcelocantos/doit/internal/policy"
@@ -87,6 +88,7 @@ type Engine struct {
 	tokenStore *policy.TokenStore
 	storePath  string
 	promoteCh  chan struct{}
+	projectCtx *doitctx.ProjectContext // discovered project context (may be nil)
 
 	l1Mu sync.RWMutex
 	l2Mu sync.RWMutex
@@ -148,6 +150,12 @@ func New(opts Options, engineOpts ...EngineOption) (*Engine, error) {
 		promoteCh: make(chan struct{}, 1),
 	}
 
+	// Discover project context from project root (best-effort; non-fatal).
+	if opts.ProjectRoot != "" {
+		e.projectCtx = doitctx.Discover(opts.ProjectRoot)
+	}
+
+
 	if e.storePath == "" {
 		e.storePath = policy.DefaultStorePath()
 	}
@@ -169,6 +177,14 @@ func New(opts Options, engineOpts ...EngineOption) (*Engine, error) {
 			}
 		}
 		e.policyL1 = policy.NewLevel1WithStarlark(cfgRules, starlarkEval)
+
+		// Inject project-context-aware safe-command rules (🎯T13).
+		if e.projectCtx != nil && len(e.projectCtx.SafeCommands) > 0 {
+			e.policyL1.AddProjectContextRules(
+				string(e.projectCtx.Type),
+				e.projectCtx.SafeCommands,
+			)
+		}
 	}
 
 	// L2: learned policy store.
@@ -467,6 +483,12 @@ func (e *Engine) StarlarkRulesDir() string {
 	return e.cfg.Policy.StarlarkRulesDir
 }
 
+// ProjectContext returns the discovered project context, or nil if no project
+// root was set or discovery has not been run.
+func (e *Engine) ProjectContext() *doitctx.ProjectContext {
+	return e.projectCtx
+}
+
 // RecordDecision adds a learned policy entry (L2) for a specific command
 // pattern and reloads the L2 engine.
 func (e *Engine) RecordDecision(command string, segments []string, decision string) error {
@@ -727,6 +749,9 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 		HasRedirectOut: hasRedirectOut,
 		Justification:  req.Justification,
 		SafetyArg:      req.SafetyArg,
+	}
+	if e.projectCtx != nil {
+		policyReq.ProjectType = string(e.projectCtx.Type)
 	}
 
 	e.l1Mu.RLock()
