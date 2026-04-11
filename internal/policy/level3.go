@@ -156,9 +156,6 @@ func buildPrompt(req *Request) string {
 	if req.Cwd != "" {
 		fmt.Fprintf(&sb, "  Working directory: %s\n", req.Cwd)
 	}
-	if req.HasRedirectOut {
-		sb.WriteString("  Output redirect: yes\n")
-	}
 	if req.Justification != "" {
 		fmt.Fprintf(&sb, "  Worker justification: %s\n", req.Justification)
 	}

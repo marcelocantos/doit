@@ -102,7 +102,6 @@ func TestBuildPrompt(t *testing.T) {
 			{CapName: "git", Args: []string{"push", "origin", "master"}, Tier: cap.TierDangerous},
 		},
 		Cwd:            "/home/user/project",
-		HasRedirectOut: false,
 		Justification:  "deploy to production",
 		SafetyArg:      "reviewed all commits",
 	}

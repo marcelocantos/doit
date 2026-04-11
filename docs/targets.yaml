@@ -1,3 +1,4 @@
+schema_version: 1
 targets:
   T1:
     name: MCP-first architecture
@@ -157,7 +158,21 @@ targets:
     - dry_run of 'ls >> log.txt' requires TierWrite
     - dry_run of 'cmd &> log' requires TierWrite
     - A test case covers each redirect form
-    context: 'Currently `cat /etc/passwd > /tmp/stolen` is allowed as L1 read-only. Root cause: the parser looks for Unicode ‹ / › (U+2039/U+203A), not ASCII < / >. strings.Fields preserves > as a standalone token but parseSegment never checks it — it becomes a plain arg to `cat`. The Validate() function already correctly requires TierWrite when Pipeline.RedirectOut is set (parser.go:161-165), so the fix is purely at the tokenization layer: recognize >, >>, &>, <, << as redirect operators and populate RedirectIn/RedirectOut. Blocked by / closely related to the shell-metacharacter target.'
+    context: |-
+      Two-part bug:
+
+      1. **Tokenization**: The parser looks for Unicode ‹ / › (U+2039/U+203A), not ASCII < / >. strings.Fields preserves > as a standalone token but parseSegment never checks it — it becomes a plain arg to `cat`. Result: `cat /etc/passwd > /tmp/stolen` allowed as L1 read-only.
+
+      2. **L2 implicit allow ignores redirects**: Even when using the Unicode operators that the parser DOES understand — `cat › /tmp/x` — dry_run returns `allow (Level 2), cat is read-only (implicit allow)`. L1's checkSafePipeline correctly bails out on HasRedirectOut (internal/policy/level1.go:252), but the decision then falls through to L2. L2.Evaluate() never consults req.HasRedirectOut, and matchSegment (internal/policy/level2.go:113) implicit-allows any TierRead segment unconditionally. So even in the "correct" operator form, output redirection doesn't force a write-tier check at the policy layer.
+
+      `pipeline.Validate()` does enforce TierWrite for RedirectOut (parser.go:161-165), but Validate is a separate call path from Evaluate and doesn't run during dry_run, so the policy decision comes out "allow" before Validate would ever catch it.
+
+      Fix requires three changes:
+      (a) Tokenizer: recognize >, >>, &>, <, << as redirect tokens and populate Pipeline.RedirectIn/Out.
+      (b) L1 checkSafePipeline: already correct (bails on HasRedirectOut).
+      (c) L2 Evaluate: consult req.HasRedirectOut and route redirecting pipelines away from the implicit read allow — or at minimum return Escalate when HasRedirectOut is true for a segment without an explicit write-approved entry.
+
+      Blocked by / closely related to 🎯T17 (shell metacharacter tokenization).
     tags:
     - security
     - parser
@@ -191,7 +206,7 @@ targets:
     origin: manual
     discovered: 2026-04-09
   T20:
-    name: git subcommand effective tier is enforced at policy evaluation time, not just at Run()
+    name: git AND go subcommand effective tier is enforced at policy evaluation time, not just at Run()
     status: identified
     value: 13.0
     cost: 3.0
@@ -201,7 +216,12 @@ targets:
     - dry_run of 'git status' still reports tier read
     - gitSubcommandTier() is referenced from the pipeline Validate/evaluate path, not only Git.Run()
     - A test covers tier per subcommand via the engine, not via the capability's Run method directly
-    context: 'gitSubcommandTier() in internal/cap/builtin/git.go:41-56 correctly maps commit→write, push→dangerous, unknown→dangerous. But it''s only called from Git.Run() (line 32), which is DEAD CODE under the MCP-first architecture — execution goes through engine.runShellCommand() via sh -c, not through capability.Run(). The policy evaluation path uses c.Tier() (parser.go:171, engine.go:1086) which returns the base TierRead for git. Result: `git commit -m test` and `git push` are allowed as L1 read-only. Fix: add an EffectiveTier(args []string) cap.Tier method to the Capability interface (with a default that returns Tier()), let Git override it to return gitSubcommandTier(args[0]), and have Validate + evaluatePolicy use the effective tier. Go will similarly benefit — `go test` vs `go install` should have different tiers.'
+    context: |-
+      gitSubcommandTier() in internal/cap/builtin/git.go:41-56 correctly maps commit→write, push→dangerous, unknown→dangerous. goSubcommandTier() in internal/cap/builtin/go_cmd.go:39-49 does the same (install/run/generate → dangerous, build/test/vet → build). **Both are dead code under the MCP-first architecture**: they're only called from Capability.Run(), which is never invoked — execution goes through engine.runShellCommand() via sh -c, not through capability.Run(). The policy evaluation path uses c.Tier() (engine.go:1086) which returns only the base tier (TierRead for git, TierBuild for go).
+
+      Result: `git commit -m test` and `git push` are allowed as L1 read-only; `go install ./...` and `go run ./cmd` escalate with tier=build instead of dangerous.
+
+      Fix: add an EffectiveTier(args []string) cap.Tier method to the Capability interface with a default that returns Tier(). Git and GoCmd override it to return their per-subcommand tier. engine.evaluatePolicy uses EffectiveTier(seg.Args) to populate policy.Segment.Tier, so Level 1 / Level 2 see the correct tier. Delete the redundant tier check inside Git.Run() and GoCmd.Run() since Run() is unreachable.
     tags:
     - security
     - capabilities
@@ -251,6 +271,50 @@ targets:
     tags:
     - ux
     - error-messages
+    origin: discovered during doit experimentation session 2026-04-11
+    discovered: 2026-04-11
+  T24:
+    name: Capability Validate() rejects shell metacharacters in arguments
+    status: identified
+    value: 8.0
+    cost: 3.0
+    acceptance:
+    - ls.Validate() rejects args containing |, &, ;, >, <, $, `, \n
+    - All capability Validate() methods share a common rejection helper
+    - dry_run of 'ls -la | xargs rm -rf' is denied even if the tokenizer fix for 🎯T17 regresses
+    - A test case covers each metacharacter
+    context: |-
+      Defense in depth: even once 🎯T17 correctly tokenizes shell metacharacters, individual capabilities currently accept ANY args — internal/cap/builtin/ls.go:20 has `func (l *Ls) Validate(args []string) error { return nil }`. This means if the tokenizer ever misses an edge case (unusual quoting, tab-separated operators, newline-embedded commands), junk args flow straight to sh -c. Capabilities should reject obviously-dangerous substrings in their args as a second line of defense.
+
+      A shared helper in internal/cap/validate.go — `RejectShellMetacharacters(args []string) error` — can be called from every capability's Validate(). It should reject: | & ; < > ( ) ` $ \n \r and unbalanced quotes. Commands that need literal metacharacters can bypass via Starlark rules or L3 approval.
+
+      This target is a safety net, not a primary fix. It makes 🎯T17 more robust.
+    tags:
+    - security
+    - capabilities
+    - defense-in-depth
+    origin: discovered during doit experimentation session 2026-04-11
+    discovered: 2026-04-11
+  T25:
+    name: deny-rm-catastrophic covers system directories and glob paths
+    status: identified
+    value: 5.0
+    cost: 2.0
+    acceptance:
+    - dry_run of 'rm -rf /usr' denied
+    - dry_run of 'rm -rf /etc' denied
+    - dry_run of 'rm -rf /bin' denied
+    - dry_run of 'rm -rf /Users' denied
+    - dry_run of 'rm -rf /*' denied (glob)
+    - dry_run of 'rm -rf ~root' or '~otheruser' denied
+    - Existing positive tests for '/', '.', '..', '~', '~/...' still pass
+    context: |-
+      The current deny-rm-catastrophic (internal/policy/level1.go:186-218) only blocks literal `/`, `.`, `..`, `~`, and `~/...`. It misses: glob expansion like `/*` (which becomes /bin /etc /usr... after shell expansion, wiping most of the system), specific system directories (`/usr`, `/etc`, `/bin`, `/sbin`, `/System`, `/Library`, `/Users`, `/home`, `/var`), and other-user home dirs (`~root`, `~someone`). Probed during 2026-04-11 experimentation: `rm -rf /*` and `rm -rf /usr` both escalate with no specific denial.
+
+      Maintain a denylist of absolute paths whose loss would be catastrophic on macOS and Linux. Also reject any arg containing an unescaped `*` when combined with `-r`/`-R`.
+    tags:
+    - security
+    - rules
     origin: discovered during doit experimentation session 2026-04-11
     discovered: 2026-04-11
   T3:

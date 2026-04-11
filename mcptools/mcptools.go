@@ -266,6 +266,7 @@ func elicitPolicyDecision(ctx context.Context, srv *server.MCPServer, command st
 						"type":        "string",
 						"description": "How to handle this command",
 						"enum":        []string{"allow_once", "allow_always", "deny", "deny_always"},
+						"default":     "allow_once",
 					},
 				},
 				"required": []string{"decision"},

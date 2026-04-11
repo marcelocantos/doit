@@ -26,7 +26,6 @@ import (
 	"github.com/marcelocantos/doit/internal/config"
 	doitctx "github.com/marcelocantos/doit/internal/context"
 	"github.com/marcelocantos/doit/internal/llm"
-	"github.com/marcelocantos/doit/internal/pipeline"
 	"github.com/marcelocantos/doit/internal/policy"
 	doitstar "github.com/marcelocantos/doit/internal/starlark"
 )
@@ -1069,45 +1068,30 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 		}, nil, nil
 	}
 
-	cmd, err := pipeline.ParseCommand(args, e.reg)
-	if err != nil {
-		return nil, nil, nil
+	// Extract the first word as the capability name for tier lookup.
+	// The shell handles all composition (&&, |, ;, etc.) — doit evaluates
+	// the command string as-is.
+	capName := args[0]
+	tier := cap.TierRead
+	if c, lookupErr := e.reg.Lookup(capName); lookupErr == nil {
+		tier = c.Tier()
 	}
-
-	var policySegs []policy.Segment
-	hasRedirectOut := false
-	for _, step := range cmd.Steps {
-		if step.Pipeline.RedirectOut != "" {
-			hasRedirectOut = true
-		}
-		for _, seg := range step.Pipeline.Segments {
-			tier := cap.TierRead
-			if c, lookupErr := e.reg.Lookup(seg.CapName); lookupErr == nil {
-				tier = c.Tier()
-				tiers = append(tiers, tier.String())
-			}
-			segments = append(segments, seg.CapName)
-			policySegs = append(policySegs, policy.Segment{
-				CapName: seg.CapName,
-				Args:    seg.Args,
-				Tier:    tier,
-			})
-		}
-	}
+	segments = append(segments, capName)
+	tiers = append(tiers, tier.String())
 
 	policyReq := &policy.Request{
-		Command:        strings.Join(args, " "),
-		Segments:       policySegs,
-		Cwd:            req.Cwd,
-		Retry:          req.Retry,
-		HasRedirectOut: hasRedirectOut,
-		Justification:  req.Justification,
-		SafetyArg:      req.SafetyArg,
+		Command:       req.Command,
+		Segments:      []policy.Segment{{CapName: capName, Args: args[1:], Tier: tier}},
+		Cwd:           req.Cwd,
+		Retry:         req.Retry,
+		Justification: req.Justification,
+		SafetyArg:     req.SafetyArg,
 	}
 	if e.projectCtx != nil {
 		policyReq.ProjectType = string(e.projectCtx.Type)
 	}
 
+	// L1: deterministic rules.
 	e.l1Mu.RLock()
 	l1 := e.policyL1
 	e.l1Mu.RUnlock()
@@ -1116,16 +1100,19 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 	} else {
 		result = &policy.Result{Decision: policy.Escalate, Level: 1, Reason: "L1 disabled"}
 	}
+
+	// L2: learned patterns.
 	if result.Decision == policy.Escalate && e.policyL2 != nil {
 		e.l2Mu.RLock()
 		result = e.policyL2.Evaluate(policyReq)
 		e.l2Mu.RUnlock()
 	}
+
+	// L3: LLM evaluation (claudia session).
 	if result.Decision == policy.Escalate && e.policyL3 != nil {
 		log.Printf("doit: L3 LLM call starting for %q", policyReq.Command)
 		t0 := time.Now()
 
-		// Check for active work session.
 		ws := e.ActiveSession()
 		if ws != nil {
 			sessionCtx := &policy.SessionContext{

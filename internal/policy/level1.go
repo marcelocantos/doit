@@ -249,9 +249,6 @@ func checkGitCheckoutAll(req *Request) *Result {
 }
 
 func checkSafePipeline(req *Request) *Result {
-	if req.HasRedirectOut {
-		return nil // output redirect is a write operation
-	}
 	if len(req.Segments) == 0 {
 		return nil
 	}

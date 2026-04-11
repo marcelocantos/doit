@@ -45,9 +45,8 @@ type Request struct {
 	Command        string    // original command string
 	Segments       []Segment // parsed capability + args pairs
 	Cwd            string
-	Retry          bool
-	HasRedirectOut bool   // whether the pipeline has output redirect
-	Justification  string // why the worker needs this command
+	Retry         bool
+	Justification string // why the worker needs this command
 	SafetyArg      string // why the worker believes it's safe
 	ProjectType    string // project type discovered from context (e.g. "go", "node")
 }

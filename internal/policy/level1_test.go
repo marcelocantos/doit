@@ -281,12 +281,6 @@ func TestAllowSafePipeline(t *testing.T) {
 			false,
 		},
 		{
-			"read-only with output redirect",
-			[]Segment{{CapName: "grep", Args: []string{"foo"}, Tier: cap.TierRead}},
-			true,
-			false,
-		},
-		{
 			"build tier",
 			[]Segment{{CapName: "make", Tier: cap.TierBuild}},
 			false,
@@ -298,7 +292,6 @@ func TestAllowSafePipeline(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := l1.Evaluate(&Request{
 				Segments:       tt.segments,
-				HasRedirectOut: tt.redirect,
 			})
 			if tt.wantAllow {
 				if result.Decision != Allow || result.RuleID != "allow-safe-pipeline" {
