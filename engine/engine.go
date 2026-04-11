@@ -440,6 +440,19 @@ func (e *Engine) PolicyStatus() map[string]any {
 	}
 	e.l2Mu.RUnlock()
 
+	// Count overdue L2 reviews from the store on disk.
+	if entries, err := policy.LoadStore(e.storePath); err == nil {
+		overdue := 0
+		for _, ent := range entries {
+			if ent.Approved && !ent.Review.NextReview.IsZero() && policy.NeedsReview(ent.Review.NextReview) {
+				overdue++
+			}
+		}
+		if overdue > 0 {
+			status["l2_overdue_reviews"] = overdue
+		}
+	}
+
 	if e.policyL3 != nil {
 		status["l3_model"] = e.cfg.Policy.Level3Model
 	}
@@ -481,6 +494,51 @@ func (e *Engine) StorePath() string {
 // StarlarkRulesDir returns the configured Starlark rules directory.
 func (e *Engine) StarlarkRulesDir() string {
 	return e.cfg.Policy.StarlarkRulesDir
+}
+
+// OverdueReviews returns L2 policy entries that are due for review.
+func (e *Engine) OverdueReviews() ([]policy.PolicyEntry, error) {
+	entries, err := policy.LoadStore(e.storePath)
+	if err != nil {
+		return nil, err
+	}
+	var overdue []policy.PolicyEntry
+	for _, ent := range entries {
+		if ent.Approved && !ent.Review.NextReview.IsZero() && policy.NeedsReview(ent.Review.NextReview) {
+			overdue = append(overdue, ent)
+		}
+	}
+	return overdue, nil
+}
+
+// SelfAudit runs a self-audit of the policy rules and returns findings.
+func (e *Engine) SelfAudit() ([]policy.AuditFinding, error) {
+	entries, err := policy.LoadStore(e.storePath)
+	if err != nil {
+		return nil, fmt.Errorf("load store: %w", err)
+	}
+
+	// Collect L1 rule IDs as hint strings.
+	var l1Rules []string
+	e.l1Mu.RLock()
+	if e.policyL1 != nil {
+		for _, r := range e.policyL1.Rules() {
+			l1Rules = append(l1Rules, r.ID)
+		}
+	}
+	e.l1Mu.RUnlock()
+
+	// Collect Starlark rule IDs from the rules directory.
+	var starlarkRules []string
+	if dir := e.cfg.Policy.StarlarkRulesDir; dir != "" {
+		if starRules, err := doitstar.LoadDir(dir); err == nil {
+			for _, r := range starRules {
+				starlarkRules = append(starlarkRules, r.ID)
+			}
+		}
+	}
+
+	return policy.AuditRules(l1Rules, entries, starlarkRules), nil
 }
 
 // ProjectContext returns the discovered project context, or nil if no project

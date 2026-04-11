@@ -116,6 +116,25 @@ func Register(srv *server.MCPServer, eng *engine.Engine) {
 		handlePolicyDelete(eng),
 	)
 
+	// Policy review and self-audit tools.
+	srv.AddTool(
+		mcp.NewTool("doit_policy_review",
+			mcp.WithDescription("List L2 learned policy entries that are overdue for review. "+
+				"Returns entries with their match criteria, decision, reasoning, and review schedule."),
+		),
+		handlePolicyReview(eng),
+	)
+
+	srv.AddTool(
+		mcp.NewTool("doit_self_audit",
+			mcp.WithDescription("Run a self-audit of the policy rule set. "+
+				"Detects contradictions between L1 and L2 rules, stale entries overdue by 90+ days, "+
+				"Starlark rule IDs referenced but not loaded, and duplicate L2 coverage. "+
+				"Returns findings with severity markers (error/warning/info)."),
+		),
+		handleSelfAudit(eng),
+	)
+
 	// Repo read tool (🎯T15) — read-only access to a hardcoded allowlist of
 	// project files for claim verification.
 	srv.AddTool(
@@ -470,6 +489,47 @@ func handlePolicyDelete(eng *engine.Engine) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(fmt.Sprintf("Delete failed: %v", err)), nil
 		}
 		return mcp.NewToolResultText(fmt.Sprintf("Deleted policy entry %q.", id)), nil
+	}
+}
+
+func handlePolicyReview(eng *engine.Engine) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		overdue, err := eng.OverdueReviews()
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to load policy store: %v", err)), nil
+		}
+		if len(overdue) == 0 {
+			return mcp.NewToolResultText("No policy entries due for review."), nil
+		}
+		data, _ := json.MarshalIndent(overdue, "", "  ")
+		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+func handleSelfAudit(eng *engine.Engine) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		findings, err := eng.SelfAudit()
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Self-audit failed: %v", err)), nil
+		}
+		if len(findings) == 0 {
+			return mcp.NewToolResultText("Self-audit: no issues found."), nil
+		}
+
+		var b strings.Builder
+		for _, f := range findings {
+			var marker string
+			switch f.Severity {
+			case "error":
+				marker = "[ERROR]"
+			case "warning":
+				marker = "[WARN] "
+			default:
+				marker = "[INFO] "
+			}
+			fmt.Fprintf(&b, "%s [%s] %s\n", marker, f.Category, f.Description)
+		}
+		return mcp.NewToolResultText(b.String()), nil
 	}
 }
 
