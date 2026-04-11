@@ -64,6 +64,7 @@ automatically.
 | `doit_list_capabilities` | List capabilities and their safety tiers |
 | `doit_audit_verify` | Verify audit log hash chain integrity |
 | `doit_audit_tail` | Show recent audit log entries |
+| `doit_check_config` | Verify deployment config (Bash denied, doit registered) |
 
 Commands are passed as shell strings and executed via `sh -c`, so shell
 features (pipes, redirects, `&&`, `||`) work naturally.
@@ -169,6 +170,32 @@ rules:
 ```
 
 All fields are optional — doit uses sensible defaults when no config file exists.
+
+## Security model
+
+doit's policy engine, audit log, and safety tiers only work if **doit is the
+sole execution path** for agent commands. If an agent retains direct Bash
+access alongside doit, all controls are bypassable.
+
+To enforce this in Claude Code, deny the `Bash` tool in your settings:
+
+```json
+{
+  "permissions": {
+    "deny": ["Bash"]
+  }
+}
+```
+
+Place this in `.claude/settings.json` (project scope) or
+`~/.claude/settings.json` (user scope). With Bash denied and doit registered
+as an MCP server, agents must route all command execution through
+`doit_execute` — where every invocation is evaluated by the policy engine and
+recorded in the audit log.
+
+Once configured, use `doit_check_config` to verify that:
+- `Bash` is in the deny list in `~/.claude/settings.json`
+- The doit MCP server is registered in `~/.claude.json`
 
 ## Agent integration
 

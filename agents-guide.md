@@ -1,5 +1,31 @@
 # doit — Agent Usage Guide
 
+## Security model — doit is the sole execution path
+
+**Never use Bash directly. All commands must go through `doit_execute`.**
+
+doit's security model depends on being the sole execution path. If an agent
+has direct Bash access alongside doit, the policy engine, audit log, and safety
+tiers are all bypassable. To enforce this, Claude Code must be configured to
+deny the Bash tool:
+
+```json
+{
+  "permissions": {
+    "deny": ["Bash"]
+  }
+}
+```
+
+Place this in `.claude/settings.json` (project scope) or `~/.claude/settings.json`
+(user scope). With doit registered as an MCP server, `doit_execute` replaces
+Bash as the execution path — with policy enforcement, audit logging, and
+interactive escalation built in.
+
+Use `doit_check_config` to verify that Bash is denied and doit is registered.
+
+---
+
 doit is an MCP server that mediates command execution through a three-level
 policy engine. All commands are executed via MCP tools — there is no CLI
 interface for command execution.
@@ -15,6 +41,7 @@ interface for command execution.
 | `doit_list_capabilities` | List registered capabilities and their tiers |
 | `doit_audit_verify` | Verify audit log hash chain integrity |
 | `doit_audit_tail` | Show recent audit log entries |
+| `doit_check_config` | Verify deployment config (Bash denied, doit registered) |
 
 ## Executing commands
 
