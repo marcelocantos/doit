@@ -54,6 +54,7 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "doit: %v\n", err)
 		return 1
 	}
+	defer eng.Close()
 
 	srv := server.NewMCPServer("doit", version, server.WithElicitation())
 	mcptools.Register(srv, eng)

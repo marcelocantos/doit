@@ -83,6 +83,7 @@ type Engine struct {
 	policyL1   *policy.Level1
 	policyL2   *policy.Level2
 	policyL3   *policy.Level3
+	l3Client   *llm.ClaudiaClient // persistent claudia session for L3
 	tokenStore *policy.TokenStore
 	storePath  string
 	promoteCh  chan struct{}
@@ -186,14 +187,24 @@ func New(opts Options, engineOpts ...EngineOption) (*Engine, error) {
 		}
 	}
 
-	// L3: LLM gatekeeper.
+	// L3: LLM gatekeeper (persistent claudia session).
 	if cfg.Policy.Level3Enabled {
-		client := &llm.Client{
-			Model:   cfg.Policy.Level3Model,
-			Timeout: cfg.Policy.Level3TimeoutDuration(),
+		workDir := opts.ProjectRoot
+		if workDir == "" {
+			workDir, _ = os.Getwd()
 		}
-		e.policyL3 = policy.NewLevel3(client)
-		e.tokenStore = policy.NewTokenStore(policy.DefaultTokenTTL)
+		client := llm.NewClaudiaClient(
+			cfg.Policy.Level3Model,
+			workDir,
+			cfg.Policy.Level3TimeoutDuration(),
+		)
+		if err := client.Start(); err != nil {
+			log.Printf("doit: engine: claudia session: %v (L3 disabled)", err)
+		} else {
+			e.l3Client = client
+			e.policyL3 = policy.NewLevel3(client)
+			e.tokenStore = policy.NewTokenStore(policy.DefaultTokenTTL)
+		}
 	}
 
 	for _, opt := range engineOpts {
@@ -201,6 +212,14 @@ func New(opts Options, engineOpts ...EngineOption) (*Engine, error) {
 	}
 
 	return e, nil
+}
+
+// Close shuts down engine resources, including the persistent claudia session.
+func (e *Engine) Close() {
+	if e.l3Client != nil {
+		e.l3Client.Close()
+		e.l3Client = nil
+	}
 }
 
 // Evaluate runs the policy chain without executing the command.
