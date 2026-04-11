@@ -2,7 +2,102 @@
 
 ## Active
 
-(none)
+### 🎯T17 Shell metacharacters (|, &&, ||, ;, &, (, )) are tokenized and routed through the policy engine
+- **Value**: 20
+- **Cost**: 8
+- **Acceptance**:
+  - dry_run of 'ls && rm -rf /' denies or decomposes into ls + rm segments
+  - dry_run of 'ls; rm -rf /tmp/x' parses both segments and applies rm rules
+  - dry_run of 'cat foo | tee bar' parses as read → write pipeline
+  - Existing Unicode operator tests (¦, ＆＆, ‖, ；) still pass
+  - A test suite exercising the bypasses listed in the context block exists and passes
+- **Context**: Root cause: engine/engine.go:1043 and mcptools/mcptools.go:438 use strings.Fields to tokenize the raw command string. The parser (internal/pipeline/parser.go) only recognizes Unicode operators (¦ ＆＆ ‖ ； ‹ ›), never ASCII shell operators (| && || ; < >). Commands are then executed via sh -c (engine.go:1158), which DOES interpret ASCII operators. Result: anything after &&/;/|/ is executed but invisible to the policy engine. Concretely: `ls && rm -rf /` is allowed as L1 read-only because only `ls` is seen; `ls bin 2>/dev/null; echo x` executed successfully with both sides running. This is a complete L1 bypass for any command whose first segment is read-tier. Fix options: (a) replace strings.Fields with a shell-aware lexer like mvdan.cc/sh that emits tokens for shell operators, mapped to the existing Unicode tokens, or (b) teach Parse/ParseCommand to recognize ASCII operators directly. Option (a) is safer — it also catches quoting edge cases.
+- **Tags**: security, parser, critical
+- **Origin**: discovered during doit experimentation session 2026-04-11
+- **Status**: Identified
+- **Discovered**: 2026-04-11
+
+### 🎯T18 Output redirection (&gt;, &gt;&gt;, &amp;&gt;) is recognized as a write operation
+- **Value**: 13
+- **Cost**: 3
+- **Acceptance**:
+  - dry_run of 'cat /etc/passwd > /tmp/stolen' requires TierWrite
+  - dry_run of 'ls >> log.txt' requires TierWrite
+  - dry_run of 'cmd &> log' requires TierWrite
+  - A test case covers each redirect form
+- **Context**: Currently `cat /etc/passwd > /tmp/stolen` is allowed as L1 read-only. Root cause: the parser looks for Unicode ‹ / › (U+2039/U+203A), not ASCII < / >. strings.Fields preserves > as a standalone token but parseSegment never checks it — it becomes a plain arg to `cat`. The Validate() function already correctly requires TierWrite when Pipeline.RedirectOut is set (parser.go:161-165), so the fix is purely at the tokenization layer: recognize >, >>, &>, <, << as redirect operators and populate RedirectIn/RedirectOut. Blocked by / closely related to the shell-metacharacter target.
+- **Tags**: security, parser, critical
+- **Origin**: discovered during doit experimentation session 2026-04-11
+- **Status**: Identified
+- **Discovered**: 2026-04-11
+
+### 🎯T19 Command substitution ($(...) and backticks) is rejected or parsed recursively
+- **Value**: 13
+- **Cost**: 5
+- **Acceptance**:
+  - dry_run of 'ls $(rm -rf /)' is denied or the rm segment is seen and denied
+  - dry_run of 'ls `rm -rf /`' is denied or the rm segment is seen and denied
+  - Quoted substitutions inside strings are handled correctly
+  - Variable expansion in argument positions ($PWD, ${HOME}) remains allowed
+- **Context**: Currently `ls $(rm -rf /)` and `ls \`rm -rf /\`` are allowed at L1 — the substitution body is never parsed, and sh -c then expands it at runtime. This is a command-injection vector any time an allow-listed read command is the outer wrapper. Simplest safe fix: reject any command containing $(, ${, or backticks unless specifically opted in (e.g., by a Starlark rule that recognizes a safe pattern). Stronger fix: recursively parse substitution bodies as nested pipelines so rm inside $(...) is actually evaluated. Recommend the reject-by-default path first; expand later.
+- **Tags**: security, parser, critical
+- **Origin**: discovered during doit experimentation session 2026-04-11
+- **Status**: Identified
+- **Discovered**: 2026-04-11
+
+### 🎯T20 git subcommand effective tier is enforced at policy evaluation time, not just at Run()
+- **Value**: 13
+- **Cost**: 3
+- **Acceptance**:
+  - dry_run of 'git commit -m x' reports tier write (not read)
+  - dry_run of 'git push' reports tier dangerous
+  - dry_run of 'git status' still reports tier read
+  - gitSubcommandTier() is referenced from the pipeline Validate/evaluate path, not only Git.Run()
+  - A test covers tier per subcommand via the engine, not via the capability's Run method directly
+- **Context**: gitSubcommandTier() in internal/cap/builtin/git.go:41-56 correctly maps commit→write, push→dangerous, unknown→dangerous. But it's only called from Git.Run() (line 32), which is DEAD CODE under the MCP-first architecture — execution goes through engine.runShellCommand() via sh -c, not through capability.Run(). The policy evaluation path uses c.Tier() (parser.go:171, engine.go:1086) which returns the base TierRead for git. Result: `git commit -m test` and `git push` are allowed as L1 read-only. Fix: add an EffectiveTier(args []string) cap.Tier method to the Capability interface (with a default that returns Tier()), let Git override it to return gitSubcommandTier(args[0]), and have Validate + evaluatePolicy use the effective tier. Go will similarly benefit — `go test` vs `go install` should have different tiers.
+- **Tags**: security, capabilities, critical
+- **Origin**: discovered during doit experimentation session 2026-04-11
+- **Status**: Identified
+- **Discovered**: 2026-04-11
+
+### 🎯T21 Executed commands log parsed segments and tiers to the audit log
+- **Value**: 5
+- **Cost**: 2
+- **Acceptance**:
+  - A doit_execute of 'cat foo | wc -l' produces an audit entry with segments=[cat,wc] and tiers=[read,read]
+  - A doit_execute of 'git status' produces segments=[git]
+  - Existing dry-run audit entries remain unchanged
+- **Context**: In the audit log, dry_run entries populate segments and tiers, but execute entries (e.g. seq 46-47 from the experimentation session) have segments: null, tiers: null. Root cause: runShellCommand (engine.go:1152) calls logExecution with nil segments/tiers (line 1188). evaluatePolicy already computes segments and tiers — they should be threaded through to logExecution so execute entries match dry_run entries for forensic analysis.
+- **Tags**: audit, observability
+- **Origin**: discovered during doit experimentation session 2026-04-11
+- **Status**: Identified
+- **Discovered**: 2026-04-11
+
+### 🎯T22 Sessions can be started with L1/L2-only configurations
+- **Value**: 3
+- **Cost**: 2
+- **Acceptance**:
+  - doit_session_start succeeds when L3 is disabled
+  - Sessions group audit-log entries by session ID regardless of L3 status
+  - L3-specific session features (context accumulation) degrade gracefully when L3 is off, without blocking the session itself
+- **Context**: Currently doit_session_start returns `L3 policy engine not available; sessions require L3`. Sessions have value beyond L3 context accumulation — they scope audit entries, give intent/description to a group of commands, and provide a natural unit for retrospective review. Decoupling session lifecycle from L3 availability lets users run doit with L1/L2 only and still get session-structured audit history.
+- **Tags**: sessions, ux
+- **Origin**: discovered during doit experimentation session 2026-04-11
+- **Status**: Identified
+- **Discovered**: 2026-04-11
+
+### 🎯T23 Unregistered-capability commands return an actionable error, not 'parse failed'
+- **Value**: 3
+- **Cost**: 1
+- **Acceptance**:
+  - dry_run of 'echo hello' returns a clear 'unknown capability: echo' message, not 'Level 0: no policy engine configured or parse failed'
+  - Decision is deny (not escalate) when the capability is unknown and L3 is off
+  - A test case exercises each unregistered-capability path
+- **Context**: dry_run of plain `echo hello` or `curl https://example.com` returns `Decision: escalate (Level 0) Reason: no policy engine configured or parse failed`. The real cause is `reg.Lookup(name)` failing for unregistered capabilities in parseSegment (parser.go:82). Engine.evaluatePolicy (engine.go:1073) turns a parser error into `nil, nil, nil`, which downstream is rendered as Level 0 parse failed — misleading. The message should name the missing capability and suggest either registering it or writing a Starlark rule, and the decision should be deny (not escalate) when no L3 is available.
+- **Tags**: ux, error-messages
+- **Origin**: discovered during doit experimentation session 2026-04-11
+- **Status**: Identified
+- **Discovered**: 2026-04-11
 
 ## Achieved
 
@@ -200,3 +295,16 @@
 - **Acceptance**: TODO
 - **Status**: Achieved
 - **Discovered**: 2026-04-09
+
+## Graph
+
+```mermaid
+graph TD
+    T17["Shell metacharacters (|, &&, …"]
+    T18["Output redirection (&gt;, &gt…"]
+    T19["Command substitution ($(...) …"]
+    T20["git subcommand effective tier…"]
+    T21["Executed commands log parsed …"]
+    T22["Sessions can be started with …"]
+    T23["Unregistered-capability comma…"]
+```

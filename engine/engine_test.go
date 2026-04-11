@@ -15,7 +15,12 @@ import (
 )
 
 func TestNew_DefaultConfig(t *testing.T) {
-	eng, err := New(Options{})
+	// Use an explicit config to avoid spawning a real claudia session.
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	os.WriteFile(cfgPath, []byte("policy:\n  level3_enabled: false\n"), 0600)
+
+	eng, err := New(Options{ConfigPath: cfgPath})
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -30,7 +35,7 @@ func TestNew_DefaultConfig(t *testing.T) {
 func TestNew_ExplicitConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
-	os.WriteFile(cfgPath, []byte("tiers:\n  read: true\n  build: true\n  write: true\n  dangerous: false\npolicy:\n  level1_enabled: true\n"), 0600)
+	os.WriteFile(cfgPath, []byte("tiers:\n  read: true\n  build: true\n  write: true\n  dangerous: false\npolicy:\n  level1_enabled: true\n  level3_enabled: false\n"), 0600)
 
 	eng, err := New(Options{ConfigPath: cfgPath})
 	if err != nil {
@@ -228,7 +233,10 @@ func TestNew_ProjectConfig(t *testing.T) {
 
 func TestNew_ProjectConfigMissing(t *testing.T) {
 	// ProjectRoot with no .doit/config.yaml should work fine.
-	eng, err := New(Options{ProjectRoot: t.TempDir()})
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	os.WriteFile(cfgPath, []byte("policy:\n  level3_enabled: false\n"), 0600)
+	eng, err := New(Options{ConfigPath: cfgPath, ProjectRoot: t.TempDir()})
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}

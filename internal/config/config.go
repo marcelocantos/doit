@@ -79,6 +79,7 @@ func DefaultConfig() *Config {
 		Policy: PolicyConfig{
 			Level1Enabled: true,
 			Level2Enabled: true,
+			Level3Enabled: true,
 		},
 	}
 }

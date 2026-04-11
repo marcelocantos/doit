@@ -47,8 +47,8 @@ func TestDefaultConfig(t *testing.T) {
 	if !cfg.Policy.Level2Enabled {
 		t.Error("expected Policy.Level2Enabled to be true")
 	}
-	if cfg.Policy.Level3Enabled {
-		t.Error("expected Policy.Level3Enabled to be false")
+	if !cfg.Policy.Level3Enabled {
+		t.Error("expected Policy.Level3Enabled to be true")
 	}
 
 	// Rules should be nil (defaults applied at ApplyRules time).
