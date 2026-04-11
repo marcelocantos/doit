@@ -87,37 +87,6 @@
 - **Status**: Identified
 - **Discovered**: 2026-04-10
 
-### 🎯T16 doit is the sole execution path — agents have no direct Bash access
-- **Value**: 8
-- **Cost**: 2
-- **Acceptance**:
-  - Documentation and agents-guide instruct agents to use only doit_execute
-  - Claude Code permission config denies Bash and routes through doit MCP tools
-  - Worker CLAUDE.md audit tool verifies doit routing is configured correctly
-  - Agents that attempt direct Bash are detected and flagged
-- **Context**: The entire security model depends on doit being the sole execution path. If an agent can bypass doit via direct Bash, all policy enforcement is theatre. This is about ensuring the deployment configuration enforces the architecture.
-- **Tags**: safety, deployment
-- **Origin**: roadmap — design doc core principle
-- **Status**: Identified
-- **Discovered**: 2026-04-10
-
-### 🎯T8 L3 evaluation runs as a persistent claudia session
-- **Value**: 5
-- **Cost**: 3
-- **Acceptance**:
-  - doit imports claudia as a Go library dependency
-  - Engine.New starts a persistent claudia session when L3 is enabled
-  - L3 evaluation sends a structured prompt to the claudia session and parses the response
-  - Session /clear runs between evaluations to prevent context cross-contamination
-  - L3 escalation fires MCP elicitation with the agent's reasoning
-  - L3 decisions are recorded in audit log with level=3
-  - Session is gracefully shut down when the engine stops
-- **Context**: Instead of a raw LLM API client, L3 uses a persistent claudia session (github.com/marcelocantos/claudia). The session starts with the engine and persists for its lifetime. Each evaluation sends a prompt, gets a decision, then /clear resets context. This gives L3 full Claude Code capabilities (file reading, project context) while maintaining clean evaluation boundaries. Collapses the old L3-as-API-call and session-agent concepts into one architecture.
-- **Tags**: policy, llm, claudia
-- **Origin**: roadmap — STABILITY.md 1.0 gap
-- **Status**: Identified
-- **Discovered**: 2026-04-10
-
 ### 🎯T9 Rule promotion generates high-quality Starlark from L3 context
 - **Value**: 3
 - **Cost**: 3
@@ -133,6 +102,39 @@
 - **Discovered**: 2026-04-10
 
 ## Achieved
+
+### 🎯T16 doit is the sole execution path — agents have no direct Bash access
+- **Value**: 8
+- **Cost**: 2
+- **Acceptance**:
+  - Documentation and agents-guide instruct agents to use only doit_execute
+  - Claude Code permission config denies Bash and routes through doit MCP tools
+  - Worker CLAUDE.md audit tool verifies doit routing is configured correctly
+  - Agents that attempt direct Bash are detected and flagged
+- **Context**: The entire security model depends on doit being the sole execution path. If an agent can bypass doit via direct Bash, all policy enforcement is theatre. This is about ensuring the deployment configuration enforces the architecture.
+- **Tags**: safety, deployment
+- **Origin**: roadmap — design doc core principle
+- **Status**: Achieved
+- **Discovered**: 2026-04-10
+- **Achieved**: 2026-04-11
+
+### 🎯T8 L3 evaluation runs as a persistent claudia session
+- **Value**: 5
+- **Cost**: 3
+- **Acceptance**:
+  - doit imports claudia as a Go library dependency
+  - Engine.New starts a persistent claudia session when L3 is enabled
+  - L3 evaluation sends a structured prompt to the claudia session and parses the response
+  - Session /clear runs between evaluations to prevent context cross-contamination
+  - L3 escalation fires MCP elicitation with the agent's reasoning
+  - L3 decisions are recorded in audit log with level=3
+  - Session is gracefully shut down when the engine stops
+- **Context**: Instead of a raw LLM API client, L3 uses a persistent claudia session (github.com/marcelocantos/claudia). The session starts with the engine and persists for its lifetime. Each evaluation sends a prompt, gets a decision, then /clear resets context. This gives L3 full Claude Code capabilities (file reading, project context) while maintaining clean evaluation boundaries. Collapses the old L3-as-API-call and session-agent concepts into one architecture.
+- **Tags**: policy, llm, claudia
+- **Origin**: roadmap — STABILITY.md 1.0 gap
+- **Status**: Achieved
+- **Discovered**: 2026-04-10
+- **Achieved**: 2026-04-11
 
 ### 🎯T7 L2 policy store has an MCP management tool
 - **Value**: 5
@@ -200,7 +202,5 @@ graph TD
     T13["Project context auto-discover…"]
     T14["Session-scoped gatekeeper use…"]
     T15["Gatekeeper has read-only repo…"]
-    T16["doit is the sole execution pa…"]
-    T8["L3 evaluation runs as a persi…"]
     T9["Rule promotion generates high…"]
 ```
