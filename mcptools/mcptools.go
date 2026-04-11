@@ -19,6 +19,7 @@ import (
 
 	"github.com/marcelocantos/doit/engine"
 	"github.com/marcelocantos/doit/internal/audit"
+	"github.com/marcelocantos/doit/internal/policy"
 )
 
 // Register adds doit's MCP tools to the given server. The server must
@@ -93,6 +94,23 @@ func Register(srv *server.MCPServer, eng *engine.Engine) {
 			mcp.WithNumber("count", mcp.Description("Number of entries to show (default 20)")),
 		),
 		handleAuditTail(eng),
+	)
+
+	// Policy management tools.
+	srv.AddTool(
+		mcp.NewTool("doit_policy_list",
+			mcp.WithDescription("List L2 learned policy entries. Shows match criteria, "+
+				"decision, provenance, approval status, and review schedule."),
+		),
+		handlePolicyList(eng),
+	)
+
+	srv.AddTool(
+		mcp.NewTool("doit_policy_delete",
+			mcp.WithDescription("Delete an L2 learned policy entry by ID."),
+			mcp.WithString("id", mcp.Required(), mcp.Description("The policy entry ID to delete")),
+		),
+		handlePolicyDelete(eng),
 	)
 }
 
@@ -397,6 +415,33 @@ func handleAuditTail(eng *engine.Engine) server.ToolHandlerFunc {
 		}
 		data, _ := json.MarshalIndent(entries, "", "  ")
 		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+func handlePolicyList(eng *engine.Engine) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		entries, err := policy.LoadStore(eng.StorePath())
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to load policy store: %v", err)), nil
+		}
+		if len(entries) == 0 {
+			return mcp.NewToolResultText("No L2 policy entries."), nil
+		}
+		data, _ := json.MarshalIndent(entries, "", "  ")
+		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+func handlePolicyDelete(eng *engine.Engine) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id := argString(req.GetArguments(), "id")
+		if id == "" {
+			return mcp.NewToolResultError("missing required parameter: id"), nil
+		}
+		if err := policy.DeleteEntry(eng.StorePath(), id); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Delete failed: %v", err)), nil
+		}
+		return mcp.NewToolResultText(fmt.Sprintf("Deleted policy entry %q.", id)), nil
 	}
 }
 

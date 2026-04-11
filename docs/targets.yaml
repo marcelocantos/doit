@@ -8,6 +8,120 @@ targets:
     - TODO
     origin: manual
     discovered: 2026-04-09
+  T10:
+    name: L3→L2 auto-promotion detects stable patterns from decision history
+    status: identified
+    value: 3.0
+    cost: 3.0
+    acceptance:
+    - Semantic similarity grouping clusters similar L3 decisions (e.g., go test ./... variants)
+    - Conditional branching detection identifies same command approved/denied based on different flags
+    - Stable L3 patterns are proposed as L2 entries for human approval via elicitation
+    - Auto-promotion runs after L3 decisions (tryPromote already exists, needs elicitation integration)
+    context: The claudia session (🎯T8) can analyse L3 decision history for patterns. Instead of simple audit log analysis, the agent uses semantic understanding to cluster similar decisions and propose L2 entries. Runs as a periodic task within the existing claudia session.
+    tags:
+    - policy
+    - claudia
+    origin: roadmap — docs/todo.md Policy Migration
+    discovered: 2026-04-10
+  T11:
+    name: Spaced repetition review keeps learned policy fresh
+    status: identified
+    value: 3.0
+    cost: 2.0
+    acceptance:
+    - L2 entries have ReviewSchedule with next_review dates
+    - Overdue entries are surfaced via doit_policy_status or a dedicated review tool
+    - 'Review elicitation presents the entry and asks: keep, modify, or remove'
+    - Review intervals use spaced repetition (increasing intervals after each confirmation)
+    context: 'L2 entries have ReviewSchedule fields but review is never triggered. Without periodic review, learned policy accumulates stale entries that don''t reflect current project reality. Design doc section: Spaced Repetition Review.'
+    tags:
+    - policy
+    origin: roadmap — design doc
+    discovered: 2026-04-10
+  T12:
+    name: Gatekeeper self-audit detects dangerous rule combinations and drift
+    status: identified
+    value: 2.0
+    cost: 3.0
+    acceptance:
+    - Periodic audit detects rules that are dangerous in combination
+    - Flags rules that have drifted from current project reality
+    - Identifies L3 patterns that should have been promoted but weren't
+    - Surfaces inconsistencies between L1 Starlark rules and L2 learned entries
+    context: The claudia session (🎯T8) can perform holistic rule set review. The agent reads all L1 Starlark rules and L2 entries, reasons about interactions, and flags dangerous combinations or drift. Runs as a periodic or on-demand task.
+    tags:
+    - policy
+    - safety
+    - claudia
+    origin: roadmap — docs/todo.md Gatekeeper Self-Audit
+    discovered: 2026-04-10
+  T13:
+    name: Project context auto-discovery informs policy decisions
+    status: identified
+    value: 3.0
+    cost: 2.0
+    acceptance:
+    - Engine discovers project type from Makefile, go.mod, package.json, etc.
+    - Project context influences L1/L2 evaluation (e.g., Go project allows go test)
+    - CLAUDE.md is parsed for doit-relevant configuration hints
+    - Context is passed to L3 for informed reasoning about command safety
+    context: 'Currently doit treats all commands the same regardless of project context. A Go project should auto-allow go test, a Node project should allow npm test. Per-project config handles explicit rules but auto-discovery handles the common case. Design doc section: Global vs Repo-Level Policy.'
+    tags:
+    - policy
+    - context
+    origin: roadmap — docs/todo.md Global vs Repo-Level Policy
+    discovered: 2026-04-10
+  T14:
+    name: Session-scoped gatekeeper uses claudia for context-aware triage
+    status: identified
+    value: 5.0
+    cost: 3.0
+    acceptance:
+    - Worker can introduce a work session via doit_execute metadata (scope, description)
+    - Session context persists across evaluations within a declared work session (no /clear)
+    - Session agent makes faster, more informed decisions using accumulated work context
+    - Session agent can pre-approve patterns within the declared scope
+    - Session ends on worker signal or timeout, resuming per-command /clear behavior
+    context: 'With L3 already running as a persistent claudia session (🎯T8), the session agent becomes an extension: workers can introduce a work session with scope/description, and the existing claudia session accumulates that context across evaluations (skip /clear for within-session commands). This builds on top of the L3 claudia integration rather than being a separate system.'
+    tags:
+    - policy
+    - agent
+    - claudia
+    origin: roadmap — docs/todo.md Gatekeeper Capabilities
+    discovered: 2026-04-10
+  T15:
+    name: Gatekeeper has read-only repo access for claim verification
+    status: identified
+    value: 2.0
+    cost: 2.0
+    acceptance:
+    - Gatekeeper can read .gitignore to verify 'generated directory' claims
+    - Gatekeeper can read build config to verify build-related command justifications
+    - Read-only access is enforced — gatekeeper cannot modify the repo
+    - Hardcoded allowlist governs which files the gatekeeper can read
+    context: When an agent claims 'this directory is generated, safe to delete', the gatekeeper currently takes it at face value. With repo access, it can verify claims against .gitignore, build configs, etc.
+    tags:
+    - policy
+    - safety
+    origin: roadmap — docs/todo.md Gatekeeper Capabilities
+    discovered: 2026-04-10
+  T16:
+    name: doit is the sole execution path — agents have no direct Bash access
+    status: identified
+    value: 8.0
+    cost: 2.0
+    acceptance:
+    - Documentation and agents-guide instruct agents to use only doit_execute
+    - Claude Code permission config denies Bash and routes through doit MCP tools
+    - Worker CLAUDE.md audit tool verifies doit routing is configured correctly
+    - Agents that attempt direct Bash are detected and flagged
+    context: The entire security model depends on doit being the sole execution path. If an agent can bypass doit via direct Bash, all policy enforcement is theatre. This is about ensuring the deployment configuration enforces the architecture.
+    tags:
+    - safety
+    - deployment
+    origin: roadmap — design doc core principle
+    discovered: 2026-04-10
   T2:
     name: sh -c execution model
     status: achieved
@@ -53,3 +167,56 @@ targets:
     - TODO
     origin: manual
     discovered: 2026-04-09
+  T7:
+    name: L2 policy store has an MCP management tool
+    status: achieved
+    value: 5.0
+    cost: 2.0
+    acceptance:
+    - doit_policy_list MCP tool shows L2 entries with match criteria, decision, provenance, and review status
+    - doit_policy_delete MCP tool removes an L2 entry by ID
+    - doit_policy_status reports L2 entry count
+    context: Users cannot currently inspect or manage L2 learned policy entries. The only way to see what's been learned is to read the YAML file directly. This is a 1.0 prerequisite (STABILITY.md gap).
+    tags:
+    - policy
+    - mcp
+    origin: roadmap — STABILITY.md 1.0 gap
+    discovered: 2026-04-10
+    achieved: 2026-04-10
+  T8:
+    name: L3 evaluation runs as a persistent claudia session
+    status: identified
+    value: 5.0
+    cost: 3.0
+    acceptance:
+    - doit imports claudia as a Go library dependency
+    - Engine.New starts a persistent claudia session when L3 is enabled
+    - L3 evaluation sends a structured prompt to the claudia session and parses the response
+    - Session /clear runs between evaluations to prevent context cross-contamination
+    - L3 escalation fires MCP elicitation with the agent's reasoning
+    - L3 decisions are recorded in audit log with level=3
+    - Session is gracefully shut down when the engine stops
+    context: Instead of a raw LLM API client, L3 uses a persistent claudia session (github.com/marcelocantos/claudia). The session starts with the engine and persists for its lifetime. Each evaluation sends a prompt, gets a decision, then /clear resets context. This gives L3 full Claude Code capabilities (file reading, project context) while maintaining clean evaluation boundaries. Collapses the old L3-as-API-call and session-agent concepts into one architecture.
+    tags:
+    - policy
+    - llm
+    - claudia
+    origin: roadmap — STABILITY.md 1.0 gap
+    discovered: 2026-04-10
+  T9:
+    name: Rule promotion generates high-quality Starlark from L3 context
+    status: identified
+    value: 3.0
+    cost: 3.0
+    acceptance:
+    - Phase 2 elicitation rule proposals include L3 reasoning context
+    - Generated Starlark rules handle edge cases (combined flags, flag=value syntax)
+    - Generated rules include comprehensive test cases covering allow and deny paths
+    - ProposeRules uses command semantics (not just string splitting) to determine generality levels
+    context: With L3 running as a claudia session, rule promotion can leverage the agent's full reasoning capability. Instead of simple string splitting, the claudia session generates Starlark rules with semantic understanding of the command, its flags, and the project context. The agent proposes rules at varying generality levels for the phase 2 elicitation.
+    tags:
+    - policy
+    - starlark
+    - claudia
+    origin: roadmap — STABILITY.md 1.0 gap
+    discovered: 2026-04-10
