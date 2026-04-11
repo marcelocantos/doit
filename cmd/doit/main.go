@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -50,21 +51,18 @@ func run() int {
 		}
 	}
 
-	log.SetOutput(os.Stderr)
-	log.SetPrefix("doit: ")
+	// Suppress log output — MCP clients may interpret stderr as errors.
+	log.SetOutput(io.Discard)
 
-	log.Println("starting engine.New")
 	eng, err := engine.New(engine.Options{ConfigPath: configPath})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "doit: %v\n", err)
 		return 1
 	}
 	defer eng.Close()
-	log.Println("engine.New complete")
 
 	srv := server.NewMCPServer("doit", version, server.WithElicitation())
 	mcptools.Register(srv, eng)
-	log.Println("MCP tools registered, starting stdio listener")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
