@@ -234,6 +234,214 @@ func TestNew_ProjectConfigMissing(t *testing.T) {
 	}
 }
 
+func TestParseCommand(t *testing.T) {
+	tests := []struct {
+		name       string
+		command    string
+		wantCap    string
+		wantSubcmd string
+		wantFlags  []string
+		wantPaths  []string
+	}{
+		{
+			name:       "git push --force origin master",
+			command:    "git push --force origin master",
+			wantCap:    "git",
+			wantSubcmd: "push",
+			wantFlags:  []string{"--force"},
+			wantPaths:  nil,
+		},
+		{
+			name:       "make -j4",
+			command:    "make -j4",
+			wantCap:    "make",
+			wantSubcmd: "",
+			wantFlags:  []string{"-j"},
+			wantPaths:  nil,
+		},
+		{
+			name:       "rm -rf ./build",
+			command:    "rm -rf ./build",
+			wantCap:    "rm",
+			wantSubcmd: "",
+			wantFlags:  []string{"-r", "-f"},
+			wantPaths:  []string{"./build"},
+		},
+		{
+			name:       "long flag with value",
+			command:    "curl --output=file.txt example.com",
+			wantCap:    "curl",
+			wantSubcmd: "",
+			wantFlags:  []string{"--output"},
+			wantPaths:  nil,
+		},
+		{
+			name:       "combined short flags",
+			command:    "tar -xzf archive.tar.gz",
+			wantCap:    "tar",
+			wantSubcmd: "",
+			wantFlags:  []string{"-x", "-z", "-f"},
+			wantPaths:  nil,
+		},
+		{
+			name:       "path argument",
+			command:    "rm -rf /tmp/dangerous",
+			wantCap:    "rm",
+			wantSubcmd: "",
+			wantFlags:  []string{"-r", "-f"},
+			wantPaths:  []string{"/tmp/dangerous"},
+		},
+		{
+			name:       "subcommand with path",
+			command:    "git add src/main.go",
+			wantCap:    "git",
+			wantSubcmd: "add",
+			wantFlags:  nil,
+			wantPaths:  []string{"src/main.go"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pc := parseCommand(tt.command)
+			if pc.Cap != tt.wantCap {
+				t.Errorf("Cap: got %q, want %q", pc.Cap, tt.wantCap)
+			}
+			if pc.Subcmd != tt.wantSubcmd {
+				t.Errorf("Subcmd: got %q, want %q", pc.Subcmd, tt.wantSubcmd)
+			}
+			if !slicesEqual(pc.Flags, tt.wantFlags) {
+				t.Errorf("Flags: got %v, want %v", pc.Flags, tt.wantFlags)
+			}
+			if !slicesEqual(pc.Paths, tt.wantPaths) {
+				t.Errorf("Paths: got %v, want %v", pc.Paths, tt.wantPaths)
+			}
+		})
+	}
+}
+
+func TestProposeRules_GitPushForce(t *testing.T) {
+	eng := newTestEngine(t)
+	proposals := eng.ProposeRules("git push --force origin master", "deny")
+
+	if len(proposals) < 2 {
+		t.Fatalf("want >= 2 proposals, got %d", len(proposals))
+	}
+
+	// Check we get narrow, moderate, and broad.
+	generalities := map[string]bool{}
+	for _, p := range proposals {
+		generalities[p.Generality] = true
+		if p.Source == "" {
+			t.Errorf("proposal %q has empty Source", p.Description)
+		}
+	}
+	if !generalities["narrow"] {
+		t.Error("missing narrow proposal")
+	}
+	if !generalities["moderate"] {
+		t.Error("missing moderate proposal")
+	}
+	if !generalities["broad"] {
+		t.Error("missing broad proposal")
+	}
+}
+
+func TestProposeRules_MakeJ4(t *testing.T) {
+	eng := newTestEngine(t)
+	proposals := eng.ProposeRules("make -j4", "deny")
+
+	if len(proposals) < 2 {
+		t.Fatalf("want >= 2 proposals, got %d", len(proposals))
+	}
+
+	// Should have a narrow flag-based proposal and a broad one.
+	hasNarrow := false
+	hasBroad := false
+	for _, p := range proposals {
+		if p.Generality == "narrow" {
+			hasNarrow = true
+			if !strings.Contains(p.Description, "-j") {
+				t.Errorf("narrow proposal should reference -j flag: %s", p.Description)
+			}
+		}
+		if p.Generality == "broad" {
+			hasBroad = true
+		}
+	}
+	if !hasNarrow {
+		t.Error("missing narrow proposal for make -j4")
+	}
+	if !hasBroad {
+		t.Error("missing broad proposal for make -j4")
+	}
+}
+
+func TestProposeRules_RmRfBuild(t *testing.T) {
+	eng := newTestEngine(t)
+	proposals := eng.ProposeRules("rm -rf ./build", "deny")
+
+	if len(proposals) < 2 {
+		t.Fatalf("want >= 2 proposals, got %d", len(proposals))
+	}
+
+	// Should detect path argument and -r, -f flags.
+	hasNarrow := false
+	for _, p := range proposals {
+		if p.Generality == "narrow" {
+			hasNarrow = true
+			// Should reference the flags since they're present.
+			if !strings.Contains(p.Description, "-r") && !strings.Contains(p.Description, "./build") {
+				t.Errorf("narrow proposal should reference flags or path: %s", p.Description)
+			}
+		}
+	}
+	if !hasNarrow {
+		t.Error("missing narrow proposal for rm -rf ./build")
+	}
+}
+
+func TestProposeRules_EmptyCommand(t *testing.T) {
+	eng := newTestEngine(t)
+	proposals := eng.ProposeRules("", "deny")
+	if len(proposals) != 0 {
+		t.Errorf("empty command: want 0 proposals, got %d", len(proposals))
+	}
+}
+
+func TestProposeRules_AllowDecision(t *testing.T) {
+	eng := newTestEngine(t)
+	proposals := eng.ProposeRules("go test ./...", "allow")
+
+	hasBroad := false
+	for _, p := range proposals {
+		if p.Generality == "broad" {
+			hasBroad = true
+			if !strings.Contains(p.Description, "Allow") {
+				t.Errorf("broad proposal should use 'Allow': %s", p.Description)
+			}
+		}
+	}
+	if !hasBroad {
+		t.Error("missing broad proposal")
+	}
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func newTestEngine(t *testing.T) *Engine {
 	t.Helper()
 	dir := t.TempDir()

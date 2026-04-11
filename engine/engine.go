@@ -611,26 +611,88 @@ type RuleProposal struct {
 	Source      string // generated Starlark source code
 }
 
-// ProposeRules generates Starlark rule proposals at varying generality levels
-// for a given command decision. Returns 2-3 options for the user to choose from.
-func (e *Engine) ProposeRules(command string, decision string) []RuleProposal {
+// parsedCommand holds the semantic decomposition of a command string.
+type parsedCommand struct {
+	Cap        string   // capability name (first token)
+	Subcmd     string   // subcommand (first non-flag after cap)
+	Flags      []string // all flag tokens (normalised)
+	Paths      []string // positional args that look like filesystem paths
+	Positional []string // all non-flag positional arguments after subcmd
+}
+
+// parseCommand decomposes a command string into semantic components.
+// It handles combined short flags (-rf → -r, -f), flag=value syntax
+// (--output=json → --output), and recognises common subcommand patterns.
+func parseCommand(command string) parsedCommand {
 	parts := strings.Fields(command)
 	if len(parts) == 0 {
-		return nil
+		return parsedCommand{}
 	}
 
-	capName := parts[0]
-	subcmd := ""
-	if len(parts) > 1 && !strings.HasPrefix(parts[1], "-") {
-		subcmd = parts[1]
+	pc := parsedCommand{Cap: parts[0]}
+
+	// Detect subcommand: first non-flag token after the capability.
+	rest := parts[1:]
+	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
+		pc.Subcmd = rest[0]
+		rest = rest[1:]
 	}
 
-	// Extract flags from the command.
-	var flags []string
-	for _, arg := range parts[1:] {
-		if strings.HasPrefix(arg, "-") {
-			flags = append(flags, arg)
+	for _, arg := range rest {
+		if arg == "--" {
+			continue
 		}
+		if strings.HasPrefix(arg, "--") {
+			// Long flag: split --flag=value into just the flag.
+			if eqIdx := strings.Index(arg, "="); eqIdx >= 0 {
+				pc.Flags = append(pc.Flags, arg[:eqIdx])
+			} else {
+				pc.Flags = append(pc.Flags, arg)
+			}
+		} else if strings.HasPrefix(arg, "-") && len(arg) > 1 {
+			// Short flag(s): expand combined flags (-rf → -r, -f).
+			// Stop expansion if we hit a digit (e.g. -j4 → -j).
+			for i, ch := range arg[1:] {
+				if ch >= '0' && ch <= '9' {
+					// Numeric value attached to previous flag; keep the flag prefix.
+					if i == 0 {
+						pc.Flags = append(pc.Flags, "-"+string(arg[1]))
+					}
+					break
+				}
+				pc.Flags = append(pc.Flags, "-"+string(ch))
+			}
+		} else {
+			// Positional argument.
+			pc.Positional = append(pc.Positional, arg)
+			if looksLikePath(arg) {
+				pc.Paths = append(pc.Paths, arg)
+			}
+		}
+	}
+	return pc
+}
+
+// looksLikePath returns true if arg looks like a filesystem path.
+func looksLikePath(arg string) bool {
+	return strings.HasPrefix(arg, "/") ||
+		strings.HasPrefix(arg, "./") ||
+		strings.HasPrefix(arg, "../") ||
+		strings.Contains(arg, "/")
+}
+
+// ProposeRules generates Starlark rule proposals at varying generality levels
+// for a given command decision. Returns 2-3 options for the user to choose from.
+//
+// The parser handles edge cases that simple string splitting misses:
+//   - Combined short flags (-rf → -r, -f)
+//   - Long flag=value syntax (--output=json → --output flag)
+//   - Numeric flag values (-j4 → -j flag)
+//   - Path-like positional arguments
+func (e *Engine) ProposeRules(command string, decision string) []RuleProposal {
+	pc := parseCommand(command)
+	if pc.Cap == "" {
+		return nil
 	}
 
 	var proposals []RuleProposal
@@ -638,48 +700,143 @@ func (e *Engine) ProposeRules(command string, decision string) []RuleProposal {
 	if decision == "allow" {
 		decWord = "allow"
 	}
-	bypassable := decision != "deny" // allow rules are bypassable
+	bypassable := decision != "deny"
 
 	// Narrow: exact command pattern (cap + subcmd + specific flags).
-	if subcmd != "" && len(flags) > 0 {
-		ruleID := fmt.Sprintf("%s-%s-%s-%s", decWord, capName, subcmd, strings.Join(flags, "-"))
+	if pc.Subcmd != "" && len(pc.Flags) > 0 {
+		ruleID := fmt.Sprintf("%s-%s-%s-flags", decWord, pc.Cap, pc.Subcmd)
+		flagLabel := strings.Join(pc.Flags, ", ")
+
+		// Build comprehensive test cases.
+		testCases := []doitstar.GenerateTestCase{
+			// Exact command that triggered the rule.
+			{Command: pc.Cap, Args: append([]string{pc.Subcmd}, pc.Flags...), Expect: decWord},
+			// Same subcommand without the flags → should not match.
+			{Command: pc.Cap, Args: []string{pc.Subcmd}, Expect: "escalate"},
+			// Different subcommand with same flags → should not match.
+			{Command: pc.Cap, Args: append([]string{"other"}, pc.Flags...), Expect: "escalate"},
+		}
+		// Edge case: combined short flags if any short flags are present.
+		var shortChars []byte
+		for _, f := range pc.Flags {
+			if len(f) == 2 && f[0] == '-' && f[1] != '-' {
+				shortChars = append(shortChars, f[1])
+			}
+		}
+		if len(shortChars) >= 2 {
+			combined := "-" + string(shortChars)
+			testCases = append(testCases, doitstar.GenerateTestCase{
+				Command: pc.Cap, Args: []string{pc.Subcmd, combined}, Expect: decWord,
+			})
+		}
+
 		source := doitstar.Generate(doitstar.GenerateRequest{
 			RuleID:      ruleID,
-			Description: fmt.Sprintf("%s %s %s with %s", upperFirst(decWord), capName, subcmd, strings.Join(flags, ", ")),
+			Description: fmt.Sprintf("%s %s %s with %s", upperFirst(decWord), pc.Cap, pc.Subcmd, flagLabel),
 			Bypassable:  bypassable,
-			Command:     capName,
-			Subcommand:  subcmd,
-			RejectFlags: flags,
+			Command:     pc.Cap,
+			Subcommand:  pc.Subcmd,
+			RejectFlags: pc.Flags,
+			Decision:    decWord,
+			TestCases:   testCases,
+		})
+		proposals = append(proposals, RuleProposal{
+			Description: fmt.Sprintf("%s `%s %s` with %s (narrow)", upperFirst(decWord), pc.Cap, pc.Subcmd, flagLabel),
+			Generality:  "narrow",
+			Source:      source,
+		})
+	}
+
+	// Narrow (path-based): cap + subcmd + specific path arguments.
+	if pc.Subcmd != "" && len(pc.Paths) > 0 && len(pc.Flags) == 0 {
+		ruleID := fmt.Sprintf("%s-%s-%s-paths", decWord, pc.Cap, pc.Subcmd)
+		source := doitstar.Generate(doitstar.GenerateRequest{
+			RuleID:      ruleID,
+			Description: fmt.Sprintf("%s %s %s targeting %s", upperFirst(decWord), pc.Cap, pc.Subcmd, strings.Join(pc.Paths, ", ")),
+			Bypassable:  bypassable,
+			Command:     pc.Cap,
+			Subcommand:  pc.Subcmd,
+			RejectPaths: pc.Paths,
 			Decision:    decWord,
 			TestCases: []doitstar.GenerateTestCase{
-				{Command: capName, Args: append([]string{subcmd}, flags...), Expect: decWord},
-				{Command: capName, Args: []string{subcmd}, Expect: "escalate"},
+				{Command: pc.Cap, Args: append([]string{pc.Subcmd}, pc.Paths...), Expect: decWord},
+				{Command: pc.Cap, Args: []string{pc.Subcmd, "safe-path"}, Expect: "escalate"},
+				{Command: pc.Cap, Args: []string{pc.Subcmd}, Expect: "escalate"},
 			},
 		})
 		proposals = append(proposals, RuleProposal{
-			Description: fmt.Sprintf("%s `%s %s` with %s (narrow)", upperFirst(decWord), capName, subcmd, strings.Join(flags, ", ")),
+			Description: fmt.Sprintf("%s `%s %s` targeting %s (narrow)", upperFirst(decWord), pc.Cap, pc.Subcmd, strings.Join(pc.Paths, ", ")),
+			Generality:  "narrow",
+			Source:      source,
+		})
+	}
+
+	// Narrow (no subcmd, flags only): cap + specific flags.
+	if pc.Subcmd == "" && len(pc.Flags) > 0 {
+		ruleID := fmt.Sprintf("%s-%s-flags", decWord, pc.Cap)
+		flagLabel := strings.Join(pc.Flags, ", ")
+
+		testCases := []doitstar.GenerateTestCase{
+			{Command: pc.Cap, Args: pc.Flags, Expect: decWord},
+			{Command: pc.Cap, Args: []string{"safe-arg"}, Expect: "escalate"},
+		}
+
+		source := doitstar.Generate(doitstar.GenerateRequest{
+			RuleID:      ruleID,
+			Description: fmt.Sprintf("%s %s with %s", upperFirst(decWord), pc.Cap, flagLabel),
+			Bypassable:  bypassable,
+			Command:     pc.Cap,
+			RejectFlags: pc.Flags,
+			Decision:    decWord,
+			TestCases:   testCases,
+		})
+		proposals = append(proposals, RuleProposal{
+			Description: fmt.Sprintf("%s `%s` with %s (narrow)", upperFirst(decWord), pc.Cap, flagLabel),
+			Generality:  "narrow",
+			Source:      source,
+		})
+	}
+
+	// Narrow (no subcmd, paths only): cap + path arguments.
+	if pc.Subcmd == "" && len(pc.Paths) > 0 && len(pc.Flags) == 0 {
+		ruleID := fmt.Sprintf("%s-%s-paths", decWord, pc.Cap)
+		source := doitstar.Generate(doitstar.GenerateRequest{
+			RuleID:      ruleID,
+			Description: fmt.Sprintf("%s %s targeting %s", upperFirst(decWord), pc.Cap, strings.Join(pc.Paths, ", ")),
+			Bypassable:  bypassable,
+			Command:     pc.Cap,
+			RejectPaths: pc.Paths,
+			Decision:    decWord,
+			TestCases: []doitstar.GenerateTestCase{
+				{Command: pc.Cap, Args: pc.Paths, Expect: decWord},
+				{Command: pc.Cap, Args: []string{"safe-path"}, Expect: "escalate"},
+			},
+		})
+		proposals = append(proposals, RuleProposal{
+			Description: fmt.Sprintf("%s `%s` targeting %s (narrow)", upperFirst(decWord), pc.Cap, strings.Join(pc.Paths, ", ")),
 			Generality:  "narrow",
 			Source:      source,
 		})
 	}
 
 	// Moderate: cap + subcmd (any flags).
-	if subcmd != "" {
-		ruleID := fmt.Sprintf("%s-%s-%s", decWord, capName, subcmd)
+	if pc.Subcmd != "" {
+		ruleID := fmt.Sprintf("%s-%s-%s", decWord, pc.Cap, pc.Subcmd)
 		source := doitstar.Generate(doitstar.GenerateRequest{
 			RuleID:      ruleID,
-			Description: fmt.Sprintf("%s %s %s (any flags)", upperFirst(decWord), capName, subcmd),
+			Description: fmt.Sprintf("%s %s %s (any flags)", upperFirst(decWord), pc.Cap, pc.Subcmd),
 			Bypassable:  bypassable,
-			Command:     capName,
-			Subcommand:  subcmd,
+			Command:     pc.Cap,
+			Subcommand:  pc.Subcmd,
 			Decision:    decWord,
 			TestCases: []doitstar.GenerateTestCase{
-				{Command: capName, Args: []string{subcmd}, Expect: decWord},
-				{Command: capName, Args: []string{"other"}, Expect: "escalate"},
+				{Command: pc.Cap, Args: []string{pc.Subcmd}, Expect: decWord},
+				{Command: pc.Cap, Args: []string{pc.Subcmd, "--some-flag"}, Expect: decWord},
+				{Command: pc.Cap, Args: []string{"other"}, Expect: "escalate"},
 			},
 		})
 		proposals = append(proposals, RuleProposal{
-			Description: fmt.Sprintf("%s `%s %s` (any flags) (moderate)", upperFirst(decWord), capName, subcmd),
+			Description: fmt.Sprintf("%s `%s %s` (any flags) (moderate)", upperFirst(decWord), pc.Cap, pc.Subcmd),
 			Generality:  "moderate",
 			Source:      source,
 		})
@@ -687,19 +844,29 @@ func (e *Engine) ProposeRules(command string, decision string) []RuleProposal {
 
 	// Broad: cap only (any subcommand, any flags).
 	{
-		ruleID := fmt.Sprintf("%s-%s", decWord, capName)
+		ruleID := fmt.Sprintf("%s-%s", decWord, pc.Cap)
+		testCases := []doitstar.GenerateTestCase{
+			{Command: pc.Cap, Args: nil, Expect: decWord},
+		}
+		// Include a different command that should not match.
+		otherCap := "other"
+		if pc.Cap == "other" {
+			otherCap = "different"
+		}
+		testCases = append(testCases, doitstar.GenerateTestCase{
+			Command: otherCap, Args: nil, Expect: "escalate",
+		})
+
 		source := doitstar.Generate(doitstar.GenerateRequest{
 			RuleID:      ruleID,
-			Description: fmt.Sprintf("%s all %s commands", upperFirst(decWord), capName),
+			Description: fmt.Sprintf("%s all %s commands", upperFirst(decWord), pc.Cap),
 			Bypassable:  bypassable,
-			Command:     capName,
+			Command:     pc.Cap,
 			Decision:    decWord,
-			TestCases: []doitstar.GenerateTestCase{
-				{Command: capName, Args: nil, Expect: decWord},
-			},
+			TestCases:   testCases,
 		})
 		proposals = append(proposals, RuleProposal{
-			Description: fmt.Sprintf("%s all `%s` commands (broad)", upperFirst(decWord), capName),
+			Description: fmt.Sprintf("%s all `%s` commands (broad)", upperFirst(decWord), pc.Cap),
 			Generality:  "broad",
 			Source:      source,
 		})

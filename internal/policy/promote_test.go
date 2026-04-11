@@ -191,6 +191,127 @@ func TestCandidateToEntryNoSubcmd(t *testing.T) {
 	}
 }
 
+func TestAnalyseConditionalBranching(t *testing.T) {
+	// git push with --force → deny, git push without --force → allow
+	// This should produce a conditional candidate for --force.
+	var entries []audit.Entry
+	for i := 0; i < 4; i++ {
+		entries = append(entries, audit.Entry{
+			PolicyLevel:  3,
+			PolicyResult: "deny",
+			Pipeline:     "git push --force origin master",
+			Segments:     []string{"git"},
+		})
+	}
+	for i := 0; i < 4; i++ {
+		entries = append(entries, audit.Entry{
+			PolicyLevel:  3,
+			PolicyResult: "allow",
+			Pipeline:     "git push origin master",
+			Segments:     []string{"git"},
+		})
+	}
+
+	candidates := AnalyseL3Decisions(entries, PromoteOptions{MinCount: 3})
+
+	// Should find conditional candidates since uniformity is 0.5 (mixed).
+	hasConditional := false
+	for _, c := range candidates {
+		if c.Source == "conditional" {
+			hasConditional = true
+			if c.Match.Cap != "git" || c.Match.Subcmd != "push" {
+				t.Errorf("conditional candidate: want git/push, got %s/%s", c.Match.Cap, c.Match.Subcmd)
+			}
+			if len(c.Match.HasFlags) == 0 || c.Match.HasFlags[0] != "--force" {
+				t.Errorf("conditional candidate should have HasFlags=[--force], got %v", c.Match.HasFlags)
+			}
+			if c.Decision != "deny" {
+				t.Errorf("conditional candidate for --force should be deny, got %s", c.Decision)
+			}
+		}
+	}
+	if !hasConditional {
+		t.Error("expected at least one conditional candidate for --force flag")
+	}
+}
+
+func TestAnalyseConditionalBranchingInsufficientCount(t *testing.T) {
+	// Only 2 entries with the flag — below MinCount=3 threshold.
+	var entries []audit.Entry
+	for i := 0; i < 2; i++ {
+		entries = append(entries, audit.Entry{
+			PolicyLevel:  3,
+			PolicyResult: "deny",
+			Pipeline:     "git push --force",
+			Segments:     []string{"git"},
+		})
+	}
+	for i := 0; i < 4; i++ {
+		entries = append(entries, audit.Entry{
+			PolicyLevel:  3,
+			PolicyResult: "allow",
+			Pipeline:     "git push",
+			Segments:     []string{"git"},
+		})
+	}
+
+	candidates := AnalyseL3Decisions(entries, PromoteOptions{MinCount: 3})
+	for _, c := range candidates {
+		if c.Source == "conditional" && c.Decision == "deny" {
+			t.Error("should not produce conditional deny candidate with only 2 flagged entries")
+		}
+	}
+}
+
+func TestAnalyseSourceField(t *testing.T) {
+	// Uniform group should have Source="uniform".
+	var entries []audit.Entry
+	for i := 0; i < 5; i++ {
+		entries = append(entries, makeL3Entry("go", "test", "allow"))
+	}
+
+	candidates := AnalyseL3Decisions(entries, PromoteOptions{})
+	if len(candidates) != 1 {
+		t.Fatalf("want 1 candidate, got %d", len(candidates))
+	}
+	if candidates[0].Source != "uniform" {
+		t.Errorf("Source: want %q, got %q", "uniform", candidates[0].Source)
+	}
+}
+
+func TestAnalyseThreeDecisions(t *testing.T) {
+	// Three different decisions for the same cap+subcmd → no conditional candidates
+	// (conditional analysis only works with exactly 2 decisions).
+	var entries []audit.Entry
+	for i := 0; i < 3; i++ {
+		entries = append(entries, audit.Entry{
+			PolicyLevel:  3,
+			PolicyResult: "allow",
+			Pipeline:     "git push",
+			Segments:     []string{"git"},
+		})
+		entries = append(entries, audit.Entry{
+			PolicyLevel:  3,
+			PolicyResult: "deny",
+			Pipeline:     "git push --force",
+			Segments:     []string{"git"},
+		})
+		entries = append(entries, audit.Entry{
+			PolicyLevel:  3,
+			PolicyResult: "escalate",
+			Pipeline:     "git push --dry-run",
+			Segments:     []string{"git"},
+		})
+	}
+
+	candidates := AnalyseL3Decisions(entries, PromoteOptions{MinCount: 3})
+	for _, c := range candidates {
+		if c.Source == "conditional" {
+			t.Errorf("should not produce conditional candidates with 3 decisions, got %+v", c)
+		}
+	}
+}
+
 func TestCandidateToEntryHighConfidence(t *testing.T) {
 	now := time.Now()
 	c := &Candidate{
