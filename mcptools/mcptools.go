@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -111,6 +113,17 @@ func Register(srv *server.MCPServer, eng *engine.Engine) {
 			mcp.WithString("id", mcp.Required(), mcp.Description("The policy entry ID to delete")),
 		),
 		handlePolicyDelete(eng),
+	)
+
+	// Deployment verification tool.
+	srv.AddTool(
+		mcp.NewTool("doit_check_config",
+			mcp.WithDescription("Verify that doit is correctly configured as the sole execution path. "+
+				"Checks that the Bash tool is denied in Claude Code settings and that the doit MCP server "+
+				"is registered. Returns a report of what is configured correctly and what is missing."),
+			mcp.WithString("settings_path", mcp.Description("Path to Claude Code settings.json (default: ~/.claude/settings.json)")),
+		),
+		handleCheckConfig(),
 	)
 }
 
@@ -443,6 +456,120 @@ func handlePolicyDelete(eng *engine.Engine) server.ToolHandlerFunc {
 		}
 		return mcp.NewToolResultText(fmt.Sprintf("Deleted policy entry %q.", id)), nil
 	}
+}
+
+func handleCheckConfig() server.ToolHandlerFunc {
+	return func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("cannot determine home directory: %v", err)), nil
+		}
+
+		settingsPath := argString(req.GetArguments(), "settings_path")
+		if settingsPath == "" {
+			settingsPath = filepath.Join(homeDir, ".claude", "settings.json")
+		}
+		claudeJSONPath := filepath.Join(homeDir, ".claude.json")
+
+		var b strings.Builder
+		allOK := true
+
+		// Check 1: Bash is denied in settings.json.
+		bashDenied, settingsErr := checkBashDenied(settingsPath)
+		if settingsErr != nil {
+			fmt.Fprintf(&b, "[WARN] Cannot read %s: %v\n", settingsPath, settingsErr)
+			allOK = false
+		} else if bashDenied {
+			fmt.Fprintf(&b, "[OK]   Bash tool is denied in %s\n", settingsPath)
+		} else {
+			fmt.Fprintf(&b, "[FAIL] Bash tool is NOT denied in %s\n", settingsPath)
+			fmt.Fprintf(&b, "       Add {\"permissions\":{\"deny\":[\"Bash\"]}} to enforce doit as sole execution path.\n")
+			allOK = false
+		}
+
+		// Check 2: doit MCP server is registered in ~/.claude.json.
+		doitRegistered, claudeJSONErr := checkDoitRegistered(claudeJSONPath)
+		if claudeJSONErr != nil {
+			fmt.Fprintf(&b, "[WARN] Cannot read %s: %v\n", claudeJSONPath, claudeJSONErr)
+			allOK = false
+		} else if doitRegistered {
+			fmt.Fprintf(&b, "[OK]   doit MCP server is registered in %s\n", claudeJSONPath)
+		} else {
+			fmt.Fprintf(&b, "[FAIL] doit MCP server is NOT registered in %s\n", claudeJSONPath)
+			fmt.Fprintf(&b, "       Run: claude mcp add --scope user --transport stdio doit -- doit\n")
+			allOK = false
+		}
+
+		if allOK {
+			fmt.Fprintf(&b, "\ndoit is correctly configured as the sole execution path.\n")
+		} else {
+			fmt.Fprintf(&b, "\nConfiguration incomplete — see FAIL/WARN items above.\n")
+		}
+
+		return mcp.NewToolResultText(b.String()), nil
+	}
+}
+
+// checkBashDenied reads settings.json and returns true if "Bash" appears in
+// the permissions.deny list.
+func checkBashDenied(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	var settings struct {
+		Permissions struct {
+			Deny []string `json:"deny"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return false, fmt.Errorf("invalid JSON: %w", err)
+	}
+	for _, d := range settings.Permissions.Deny {
+		if d == "Bash" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// checkDoitRegistered reads ~/.claude.json and returns true if a doit MCP
+// server entry is present (any entry whose command or name is "doit").
+func checkDoitRegistered(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	// ~/.claude.json has a nested structure: {"mcpServers": {"name": {...}}}
+	// at the top level or under a "projects" key. We do a simple key search.
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
+		return false, fmt.Errorf("invalid JSON: %w", err)
+	}
+	return findDoitInMCPServers(root), nil
+}
+
+// findDoitInMCPServers recursively searches a JSON object for an mcpServers
+// key that contains a "doit" entry.
+func findDoitInMCPServers(obj map[string]json.RawMessage) bool {
+	if raw, ok := obj["mcpServers"]; ok {
+		var servers map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &servers); err == nil {
+			if _, found := servers["doit"]; found {
+				return true
+			}
+		}
+	}
+	// Recurse into nested objects (e.g. projects.<path>.mcpServers).
+	for _, v := range obj {
+		var nested map[string]json.RawMessage
+		if err := json.Unmarshal(v, &nested); err == nil {
+			if findDoitInMCPServers(nested) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func argString(args map[string]any, key string) string {
