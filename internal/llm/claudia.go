@@ -102,6 +102,16 @@ func (c *ClaudiaClient) Start() error {
 // trimmed response. It sends /clear after each evaluation to prevent
 // cross-contamination between evaluations.
 func (c *ClaudiaClient) Prompt(ctx context.Context, prompt string) (string, error) {
+	return c.prompt(ctx, prompt, true)
+}
+
+// PromptWithinSession sends a prompt without clearing context afterward.
+// Used during work sessions where accumulated context improves decisions.
+func (c *ClaudiaClient) PromptWithinSession(ctx context.Context, prompt string) (string, error) {
+	return c.prompt(ctx, prompt, false)
+}
+
+func (c *ClaudiaClient) prompt(ctx context.Context, prompt string, clearAfter bool) (string, error) {
 	c.mu.Lock()
 	agent := c.agent
 	c.mu.Unlock()
@@ -133,22 +143,33 @@ func (c *ClaudiaClient) Prompt(ctx context.Context, prompt string) (string, erro
 		return "", fmt.Errorf("claudia call failed: %w", err)
 	}
 
-	// Clear context after each evaluation to prevent cross-contamination.
-	go func() {
-		if sendErr := agent.Send("/clear"); sendErr != nil {
-			log.Printf("doit: claudia: failed to /clear: %v", sendErr)
-			return
-		}
-		clearCtx, clearCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer clearCancel()
-		_, _ = agent.WaitForResponse(clearCtx)
-	}()
+	// Clear context after each evaluation to prevent cross-contamination,
+	// unless we're within a work session.
+	if clearAfter {
+		go func() {
+			if sendErr := agent.Send("/clear"); sendErr != nil {
+				log.Printf("doit: claudia: failed to /clear: %v", sendErr)
+				return
+			}
+			clearCtx, clearCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer clearCancel()
+			_, _ = agent.WaitForResponse(clearCtx)
+		}()
+	}
 
 	result := strings.TrimSpace(response)
 	if result == "" {
 		return "", fmt.Errorf("claudia returned empty response")
 	}
 	return result, nil
+}
+
+// TimeoutDuration returns the configured timeout for this client.
+func (c *ClaudiaClient) TimeoutDuration() time.Duration {
+	if c.timeout == 0 {
+		return 60 * time.Second
+	}
+	return c.timeout
 }
 
 // Close gracefully shuts down the claudia session.

@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/marcelocantos/doit/internal/policy"
 )
 
 func TestNew_DefaultConfig(t *testing.T) {
@@ -442,6 +445,155 @@ func slicesEqual(a, b []string) bool {
 	return true
 }
 
+func TestStartSession_NoL3(t *testing.T) {
+	eng := newTestEngine(t)
+	// Test engine has no L3 configured.
+	_, err := eng.StartSession("test scope", "test desc", 0)
+	if err == nil {
+		t.Fatal("expected error when L3 is not available")
+	}
+	if !strings.Contains(err.Error(), "L3") {
+		t.Errorf("error should mention L3, got: %v", err)
+	}
+}
+
+func TestStartSession_EmptyScope(t *testing.T) {
+	eng := newTestEngineWithL3(t)
+	_, err := eng.StartSession("", "desc", 0)
+	if err == nil {
+		t.Fatal("expected error for empty scope")
+	}
+}
+
+func TestSessionLifecycle(t *testing.T) {
+	eng := newTestEngineWithL3(t)
+
+	// No active session initially.
+	if ws := eng.ActiveSession(); ws != nil {
+		t.Fatal("expected no active session initially")
+	}
+
+	// Start a session.
+	id, err := eng.StartSession("go development", "writing tests", 30*time.Minute)
+	if err != nil {
+		t.Fatalf("StartSession error: %v", err)
+	}
+	if id == "" {
+		t.Fatal("expected non-empty session ID")
+	}
+
+	// Session should be active.
+	ws := eng.ActiveSession()
+	if ws == nil {
+		t.Fatal("expected active session")
+	}
+	if ws.ID != id {
+		t.Errorf("session ID = %q, want %q", ws.ID, id)
+	}
+	if ws.Scope != "go development" {
+		t.Errorf("scope = %q, want %q", ws.Scope, "go development")
+	}
+
+	// End the session.
+	if !eng.EndSession(id) {
+		t.Fatal("EndSession returned false")
+	}
+	if ws := eng.ActiveSession(); ws != nil {
+		t.Fatal("expected no active session after end")
+	}
+
+	// Ending again should return false.
+	if eng.EndSession(id) {
+		t.Fatal("EndSession should return false for already-ended session")
+	}
+}
+
+func TestSessionAutoExpire(t *testing.T) {
+	eng := newTestEngineWithL3(t)
+
+	// Start a session with very short timeout.
+	_, err := eng.StartSession("test", "expiry test", 1*time.Millisecond)
+	if err != nil {
+		t.Fatalf("StartSession error: %v", err)
+	}
+
+	// Wait for expiry.
+	time.Sleep(5 * time.Millisecond)
+
+	// Session should be auto-expired.
+	if ws := eng.ActiveSession(); ws != nil {
+		t.Fatal("expected session to be auto-expired")
+	}
+}
+
+func TestEndSession_WrongID(t *testing.T) {
+	eng := newTestEngineWithL3(t)
+
+	_, err := eng.StartSession("test", "", 30*time.Minute)
+	if err != nil {
+		t.Fatalf("StartSession error: %v", err)
+	}
+
+	// Ending with wrong ID should fail.
+	if eng.EndSession("wrong-id") {
+		t.Fatal("EndSession should return false for wrong ID")
+	}
+
+	// Session should still be active.
+	if ws := eng.ActiveSession(); ws == nil {
+		t.Fatal("expected session still active")
+	}
+
+	// End with empty ID should end any session.
+	if !eng.EndSession("") {
+		t.Fatal("EndSession with empty ID should end active session")
+	}
+}
+
+func TestSessionInPolicyStatus(t *testing.T) {
+	eng := newTestEngineWithL3(t)
+
+	// No session info initially.
+	status := eng.PolicyStatus()
+	if _, ok := status["session"]; ok {
+		t.Fatal("expected no session in status initially")
+	}
+
+	// Start session.
+	_, err := eng.StartSession("testing", "policy status test", 30*time.Minute)
+	if err != nil {
+		t.Fatalf("StartSession error: %v", err)
+	}
+
+	status = eng.PolicyStatus()
+	sessionInfo, ok := status["session"]
+	if !ok {
+		t.Fatal("expected session in status")
+	}
+	info := sessionInfo.(map[string]any)
+	if info["scope"] != "testing" {
+		t.Errorf("session scope = %v, want %q", info["scope"], "testing")
+	}
+}
+
+func TestWorkSessionExpired(t *testing.T) {
+	ws := &WorkSession{
+		StartedAt: time.Now().Add(-1 * time.Hour),
+		Timeout:   30 * time.Minute,
+	}
+	if !ws.Expired() {
+		t.Fatal("expected session to be expired")
+	}
+
+	ws2 := &WorkSession{
+		StartedAt: time.Now(),
+		Timeout:   30 * time.Minute,
+	}
+	if ws2.Expired() {
+		t.Fatal("expected session to not be expired")
+	}
+}
+
 func newTestEngine(t *testing.T) *Engine {
 	t.Helper()
 	dir := t.TempDir()
@@ -458,4 +610,39 @@ func newTestEngine(t *testing.T) *Engine {
 		t.Fatalf("newTestEngine: %v", err)
 	}
 	return eng
+}
+
+func newTestEngineWithL3(t *testing.T) *Engine {
+	t.Helper()
+	eng := newTestEngine(t)
+	mock := &mockSessionPrompter{}
+	l3 := policy.NewLevel3(mock)
+	ts := policy.NewTokenStore(5 * time.Minute)
+	eng.policyL3 = l3
+	eng.tokenStore = ts
+	return eng
+}
+
+type mockSessionPrompter struct {
+	lastPrompt string
+	response   string
+	inSession  bool
+}
+
+func (m *mockSessionPrompter) Prompt(_ context.Context, prompt string) (string, error) {
+	m.lastPrompt = prompt
+	m.inSession = false
+	if m.response != "" {
+		return m.response, nil
+	}
+	return `{"decision":"allow","reasoning":"mock allow"}`, nil
+}
+
+func (m *mockSessionPrompter) PromptWithinSession(_ context.Context, prompt string) (string, error) {
+	m.lastPrompt = prompt
+	m.inSession = true
+	if m.response != "" {
+		return m.response, nil
+	}
+	return `{"decision":"allow","reasoning":"mock session allow"}`, nil
 }

@@ -15,6 +15,13 @@ type Prompter interface {
 	Prompt(ctx context.Context, prompt string) (string, error)
 }
 
+// SessionPrompter extends Prompter with session-aware prompting that
+// skips context clearing between evaluations.
+type SessionPrompter interface {
+	Prompter
+	PromptWithinSession(ctx context.Context, prompt string) (string, error)
+}
+
 // Level3 evaluates commands by asking an LLM gatekeeper.
 type Level3 struct {
 	client Prompter
@@ -25,9 +32,25 @@ func NewLevel3(client Prompter) *Level3 {
 	return &Level3{client: client}
 }
 
+// SessionContext provides work session information for L3 evaluation.
+type SessionContext struct {
+	Scope       string // declared scope of the work session
+	Description string // what the worker is doing
+}
+
 // Evaluate asks the LLM whether to allow, deny, or escalate the request.
 // If req.Retry is true, the command is allowed immediately without an LLM call.
 func (l *Level3) Evaluate(ctx context.Context, req *Request) *Result {
+	return l.evaluate(ctx, req, nil)
+}
+
+// EvaluateInSession is like Evaluate but uses session context for more
+// informed decisions. The claudia session retains context across calls.
+func (l *Level3) EvaluateInSession(ctx context.Context, req *Request, session *SessionContext) *Result {
+	return l.evaluate(ctx, req, session)
+}
+
+func (l *Level3) evaluate(ctx context.Context, req *Request, session *SessionContext) *Result {
 	if req.Retry {
 		return &Result{
 			Decision: Allow,
@@ -37,7 +60,25 @@ func (l *Level3) Evaluate(ctx context.Context, req *Request) *Result {
 	}
 
 	prompt := buildPrompt(req)
-	raw, err := l.client.Prompt(ctx, prompt)
+
+	if session != nil {
+		prompt = buildSessionPrefix(session) + prompt
+	}
+
+	var (
+		raw string
+		err error
+	)
+	if session != nil {
+		if sp, ok := l.client.(SessionPrompter); ok {
+			raw, err = sp.PromptWithinSession(ctx, prompt)
+		} else {
+			raw, err = l.client.Prompt(ctx, prompt)
+		}
+	} else {
+		raw, err = l.client.Prompt(ctx, prompt)
+	}
+
 	if err != nil {
 		return &Result{
 			Decision: Escalate,
@@ -55,12 +96,31 @@ func (l *Level3) Evaluate(ctx context.Context, req *Request) *Result {
 		}
 	}
 
+	ruleID := "llm-gatekeeper"
+	if session != nil {
+		ruleID = "llm-gatekeeper-session"
+	}
+
 	return &Result{
 		Decision: dec,
 		Level:    3,
 		Reason:   reasoning,
-		RuleID:   "llm-gatekeeper",
+		RuleID:   ruleID,
 	}
+}
+
+// buildSessionPrefix creates an instruction prefix for session-aware evaluation.
+func buildSessionPrefix(session *SessionContext) string {
+	var sb strings.Builder
+	sb.WriteString("WORK SESSION CONTEXT:\n")
+	fmt.Fprintf(&sb, "  Scope: %s\n", session.Scope)
+	if session.Description != "" {
+		fmt.Fprintf(&sb, "  Description: %s\n", session.Description)
+	}
+	sb.WriteString("  Instructions: Commands that clearly fall within the declared scope should be ")
+	sb.WriteString("allowed without further analysis. Only escalate commands that seem outside the ")
+	sb.WriteString("scope or potentially dangerous beyond the scope's intent.\n\n")
+	return sb.String()
 }
 
 // buildPrompt constructs the prompt sent to the LLM.

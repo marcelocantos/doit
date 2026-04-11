@@ -76,6 +76,21 @@ type EvalResult struct {
 	Tiers      []string // tier of each segment
 }
 
+// WorkSession represents an active work session where L3 evaluations
+// accumulate context for faster, more informed decisions.
+type WorkSession struct {
+	ID          string        `json:"id"`
+	Scope       string        `json:"scope"`
+	Description string        `json:"description,omitempty"`
+	StartedAt   time.Time     `json:"started_at"`
+	Timeout     time.Duration `json:"timeout"`
+}
+
+// Expired returns true if the session has exceeded its timeout.
+func (s *WorkSession) Expired() bool {
+	return time.Since(s.StartedAt) > s.Timeout
+}
+
 // Engine wraps the doit policy chain, capability registry, and audit log.
 type Engine struct {
 	cfg        *config.Config
@@ -90,8 +105,10 @@ type Engine struct {
 	promoteCh  chan struct{}
 	projectCtx *doitctx.ProjectContext // discovered project context (may be nil)
 
-	l1Mu sync.RWMutex
-	l2Mu sync.RWMutex
+	l1Mu      sync.RWMutex
+	l2Mu      sync.RWMutex
+	sessionMu sync.RWMutex
+	session   *WorkSession
 }
 
 // EngineOption configures optional Engine parameters.
@@ -232,10 +249,112 @@ func New(opts Options, engineOpts ...EngineOption) (*Engine, error) {
 
 // Close shuts down engine resources, including the persistent claudia session.
 func (e *Engine) Close() {
+	e.EndSession("") // end any active session
 	if e.l3Client != nil {
 		e.l3Client.Close()
 		e.l3Client = nil
 	}
+}
+
+// StartSession begins a work session. During a session, L3 evaluations
+// accumulate context (no /clear) for faster, more informed decisions.
+// Returns the session ID or an error if L3 is not available.
+func (e *Engine) StartSession(scope, description string, timeout time.Duration) (string, error) {
+	if e.policyL3 == nil {
+		return "", fmt.Errorf("L3 policy engine not available; sessions require L3")
+	}
+	if scope == "" {
+		return "", fmt.Errorf("scope is required")
+	}
+	if timeout <= 0 {
+		timeout = 30 * time.Minute
+	}
+
+	id := fmt.Sprintf("session-%d", time.Now().UnixMilli())
+
+	ws := &WorkSession{
+		ID:          id,
+		Scope:       scope,
+		Description: description,
+		StartedAt:   time.Now(),
+		Timeout:     timeout,
+	}
+
+	e.sessionMu.Lock()
+	e.session = ws
+	e.sessionMu.Unlock()
+
+	// Send session context to the claudia agent so it has awareness of
+	// the work scope. This message stays in context (no /clear).
+	if e.l3Client != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), e.l3Client.TimeoutDuration())
+		defer cancel()
+		sessionPrompt := fmt.Sprintf(
+			"WORK SESSION STARTED.\nScope: %s\nDescription: %s\n"+
+				"Instructions: You are now evaluating commands within a declared work session. "+
+				"Commands that clearly fall within the declared scope should be allowed without "+
+				"further analysis. Only escalate commands that seem outside the scope or "+
+				"potentially dangerous beyond the scope's intent. "+
+				"Respond with JSON as before.",
+			scope, description,
+		)
+		if _, err := e.l3Client.PromptWithinSession(ctx, sessionPrompt); err != nil {
+			log.Printf("doit: session: failed to prime claudia with session context: %v", err)
+			// Non-fatal: the session still works, just without priming.
+		}
+	}
+
+	log.Printf("doit: session started: %s (scope: %s, timeout: %v)", id, scope, timeout)
+	return id, nil
+}
+
+// EndSession ends the work session with the given ID. If id is empty, ends
+// any active session. Returns true if a session was ended.
+func (e *Engine) EndSession(id string) bool {
+	e.sessionMu.Lock()
+	ws := e.session
+	if ws == nil || (id != "" && ws.ID != id) {
+		e.sessionMu.Unlock()
+		return false
+	}
+	e.session = nil
+	e.sessionMu.Unlock()
+
+	log.Printf("doit: session ended: %s", ws.ID)
+
+	// Clear claudia context to resume per-command /clear behavior.
+	if e.l3Client != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			// Use regular Prompt with empty request to trigger /clear.
+			_, _ = e.l3Client.Prompt(ctx, "Session ended. Acknowledge with: "+
+				`{"decision":"allow","reasoning":"session ended"}`)
+		}()
+	}
+
+	return true
+}
+
+// ActiveSession returns the current work session, or nil if none is active.
+// Automatically expires sessions that have exceeded their timeout.
+func (e *Engine) ActiveSession() *WorkSession {
+	e.sessionMu.RLock()
+	ws := e.session
+	e.sessionMu.RUnlock()
+
+	if ws == nil {
+		return nil
+	}
+
+	if ws.Expired() {
+		if e.EndSession(ws.ID) {
+			log.Printf("doit: session auto-expired: %s", ws.ID)
+		}
+		return nil
+	}
+
+	return ws
 }
 
 // Evaluate runs the policy chain without executing the command.
@@ -455,6 +574,16 @@ func (e *Engine) PolicyStatus() map[string]any {
 
 	if e.policyL3 != nil {
 		status["l3_model"] = e.cfg.Policy.Level3Model
+	}
+
+	if ws := e.ActiveSession(); ws != nil {
+		status["session"] = map[string]any{
+			"id":          ws.ID,
+			"scope":       ws.Scope,
+			"description": ws.Description,
+			"started_at":  ws.StartedAt.Format(time.RFC3339),
+			"remaining":   (ws.Timeout - time.Since(ws.StartedAt)).Truncate(time.Second).String(),
+		}
 	}
 
 	return status
@@ -995,7 +1124,19 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 	if result.Decision == policy.Escalate && e.policyL3 != nil {
 		log.Printf("doit: L3 LLM call starting for %q", policyReq.Command)
 		t0 := time.Now()
-		result = e.policyL3.Evaluate(ctx, policyReq)
+
+		// Check for active work session.
+		ws := e.ActiveSession()
+		if ws != nil {
+			sessionCtx := &policy.SessionContext{
+				Scope:       ws.Scope,
+				Description: ws.Description,
+			}
+			result = e.policyL3.EvaluateInSession(ctx, policyReq, sessionCtx)
+		} else {
+			result = e.policyL3.Evaluate(ctx, policyReq)
+		}
+
 		elapsed := time.Since(t0)
 		log.Printf("doit: L3 LLM call completed in %v: %s (%s)", elapsed, result.Decision, result.Reason)
 	}
