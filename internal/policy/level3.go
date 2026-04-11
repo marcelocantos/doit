@@ -52,8 +52,10 @@ func (l *Level3) Evaluate(ctx context.Context, req *Request) *Result {
 	return l.evaluate(ctx, req, nil)
 }
 
-// EvaluateInSession is like Evaluate but uses session context for more
-// informed decisions. The claudia session retains context across calls.
+// EvaluateInSession is like Evaluate but prepends the active work
+// session's scope and description to every prompt (via
+// buildSessionPrefix) so the gatekeeper has the context it needs to
+// make scope-aware decisions.
 func (l *Level3) EvaluateInSession(ctx context.Context, req *Request, session *SessionContext) *Result {
 	return l.evaluate(ctx, req, session)
 }

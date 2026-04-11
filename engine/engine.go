@@ -98,9 +98,8 @@ type Engine struct {
 	policyL1   *policy.Level1
 	policyL2   *policy.Level2
 	policyL3   *policy.Level3
-	l3Fast     *llm.ClaudiaClient // fast triage session (sonnet)
-	l3Deep     *llm.ClaudiaClient // deep reasoning session (opus) — may be nil
-	l3Ready    chan struct{}       // closed when background L3 init completes
+	l3Fast     *llm.Client // fast triage client (sonnet)
+	l3Deep     *llm.Client // deep reasoning client (opus) — may be nil
 	tokenStore *policy.TokenStore
 	storePath  string
 	promoteCh  chan struct{}
@@ -221,53 +220,59 @@ func New(opts Options, engineOpts ...EngineOption) (*Engine, error) {
 		}
 	}
 
-	// L3: LLM gatekeeper (two-tier claudia sessions: fast + deep).
-	// Sessions start in the background so the MCP server is available
-	// immediately. L3 evaluations return Escalate until init completes.
+	// L3: LLM gatekeeper via `claude -p` (two-tier fast + deep).
+	//
+	// Previously this used a persistent claudia Session per tier, kept
+	// alive for the engine's lifetime and reset between evaluations
+	// with /clear. That turned out to be structurally broken: /clear
+	// rolls over Claude Code's session ID, creating a new JSONL file
+	// that claudia's fixed-path tailer never sees, so every evaluation
+	// after the first hung. Switching to one-shot `claude -p` per
+	// evaluation removes both the /clear problem and the background
+	// init race — L3 is available synchronously the moment NewEngine
+	// returns, there is no "L3 policy engine not available" window,
+	// and each prompt is stateless.
 	if cfg.Policy.Level3Enabled {
-		e.l3Ready = make(chan struct{})
 		e.tokenStore = policy.NewTokenStore(policy.DefaultTokenTTL)
 
-		go func() {
-			defer close(e.l3Ready)
+		workDir := opts.ProjectRoot
+		if workDir == "" {
+			workDir, _ = os.Getwd()
+		}
+		timeout := cfg.Policy.Level3TimeoutDuration()
 
-			workDir := opts.ProjectRoot
-			if workDir == "" {
-				workDir, _ = os.Getwd()
-			}
-			timeout := cfg.Policy.Level3TimeoutDuration()
+		fastModel := cfg.Policy.Level3FastModel
+		if fastModel == "" {
+			fastModel = "sonnet"
+		}
+		fastClient := &llm.Client{
+			Model:           fastModel,
+			Timeout:         timeout,
+			WorkDir:         workDir,
+			DisallowTools:   "Bash,Read,Write,Edit,Glob,Grep",
+			SkipPermissions: true,
+		}
+		e.l3Fast = fastClient
 
-			fastModel := cfg.Policy.Level3FastModel
-			if fastModel == "" {
-				fastModel = "sonnet"
+		deepModel := cfg.Policy.Level3Model
+		if deepModel == "" {
+			deepModel = "opus"
+		}
+		if deepModel != fastModel {
+			deepClient := &llm.Client{
+				Model:           deepModel,
+				Timeout:         timeout,
+				WorkDir:         workDir,
+				DisallowTools:   "Bash,Read,Write,Edit,Glob,Grep",
+				SkipPermissions: true,
 			}
-			log.Printf("doit: starting L3 fast session (%s)", fastModel)
-			fastClient := llm.NewClaudiaClient(fastModel, workDir, timeout)
-			if err := fastClient.Start(); err != nil {
-				log.Printf("doit: L3 fast session (%s): %v (L3 disabled)", fastModel, err)
-				return
-			}
-			e.l3Fast = fastClient
-
-			deepModel := cfg.Policy.Level3Model
-			if deepModel == "" {
-				deepModel = "opus"
-			}
-			if deepModel != fastModel {
-				log.Printf("doit: starting L3 deep session (%s)", deepModel)
-				deepClient := llm.NewClaudiaClient(deepModel, workDir, timeout)
-				if err := deepClient.Start(); err != nil {
-					log.Printf("doit: L3 deep session (%s): %v (fast model only)", deepModel, err)
-					e.policyL3 = policy.NewLevel3(fastClient)
-				} else {
-					e.l3Deep = deepClient
-					e.policyL3 = policy.NewLevel3(fastClient, deepClient)
-				}
-			} else {
-				e.policyL3 = policy.NewLevel3(fastClient)
-			}
-			log.Printf("doit: L3 ready")
-		}()
+			e.l3Deep = deepClient
+			e.policyL3 = policy.NewLevel3(fastClient, deepClient)
+			log.Printf("doit: L3 ready (fast=%s, deep=%s)", fastModel, deepModel)
+		} else {
+			e.policyL3 = policy.NewLevel3(fastClient)
+			log.Printf("doit: L3 ready (%s only)", fastModel)
+		}
 	}
 
 	for _, opt := range engineOpts {
@@ -277,31 +282,38 @@ func New(opts Options, engineOpts ...EngineOption) (*Engine, error) {
 	return e, nil
 }
 
-// Close shuts down engine resources, including the persistent claudia session.
+// Close shuts down engine resources. L3 clients are stateless
+// `claude -p` wrappers with nothing to clean up — Close just ends
+// any active work session.
 func (e *Engine) Close() {
 	e.EndSession("") // end any active session
-	if e.l3Fast != nil {
-		e.l3Fast.Close()
-		e.l3Fast = nil
-	}
-	if e.l3Deep != nil {
-		e.l3Deep.Close()
-		e.l3Deep = nil
-	}
+	e.l3Fast = nil
+	e.l3Deep = nil
 }
 
 // l3SessionClient returns the client to use for session interactions — the
 // deep model if available, otherwise the fast model.
-func (e *Engine) l3SessionClient() *llm.ClaudiaClient {
+func (e *Engine) l3SessionClient() *llm.Client {
 	if e.l3Deep != nil {
 		return e.l3Deep
 	}
 	return e.l3Fast
 }
 
-// StartSession begins a work session. During a session, L3 evaluations
-// accumulate context (no /clear) for faster, more informed decisions.
-// Returns the session ID or an error if L3 is not available.
+// StartSession begins a work session. During a session, the declared
+// scope and description are prepended to every L3 prompt (via
+// buildSessionPrefix in internal/policy/level3.go), giving the
+// gatekeeper scope-aware context without requiring a persistent
+// conversation. Returns the session ID or an error if L3 is not
+// available.
+//
+// Prior versions primed a persistent claudia session here with a
+// "WORK SESSION STARTED" message so subsequent evaluations would
+// benefit from accumulated context. That was predicated on claudia's
+// Session mode retaining state across calls; after the migration to
+// one-shot `claude -p` the priming step is pointless (it evaluates
+// and exits), so it's been removed. The session prefix still
+// reaches every evaluation via level3.go's buildSessionPrefix.
 func (e *Engine) StartSession(scope, description string, timeout time.Duration) (string, error) {
 	if e.policyL3 == nil {
 		return "", fmt.Errorf("L3 policy engine not available; sessions require L3")
@@ -327,32 +339,17 @@ func (e *Engine) StartSession(scope, description string, timeout time.Duration) 
 	e.session = ws
 	e.sessionMu.Unlock()
 
-	// Send session context to the claudia agent so it has awareness of
-	// the work scope. This message stays in context (no /clear).
-	if e.l3SessionClient() != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), e.l3SessionClient().TimeoutDuration())
-		defer cancel()
-		sessionPrompt := fmt.Sprintf(
-			"WORK SESSION STARTED.\nScope: %s\nDescription: %s\n"+
-				"Instructions: You are now evaluating commands within a declared work session. "+
-				"Commands that clearly fall within the declared scope should be allowed without "+
-				"further analysis. Only escalate commands that seem outside the scope or "+
-				"potentially dangerous beyond the scope's intent. "+
-				"Respond with JSON as before.",
-			scope, description,
-		)
-		if _, err := e.l3SessionClient().PromptWithinSession(ctx, sessionPrompt); err != nil {
-			log.Printf("doit: session: failed to prime claudia with session context: %v", err)
-			// Non-fatal: the session still works, just without priming.
-		}
-	}
-
 	log.Printf("doit: session started: %s (scope: %s, timeout: %v)", id, scope, timeout)
 	return id, nil
 }
 
 // EndSession ends the work session with the given ID. If id is empty, ends
 // any active session. Returns true if a session was ended.
+//
+// With the `claude -p` migration there is no persistent session state
+// to tear down — ending a work session just clears the in-engine
+// session struct so subsequent evaluations stop getting the session
+// prefix prepended.
 func (e *Engine) EndSession(id string) bool {
 	e.sessionMu.Lock()
 	ws := e.session
@@ -364,18 +361,6 @@ func (e *Engine) EndSession(id string) bool {
 	e.sessionMu.Unlock()
 
 	log.Printf("doit: session ended: %s", ws.ID)
-
-	// Clear claudia context to resume per-command /clear behavior.
-	if e.l3SessionClient() != nil {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			// Use regular Prompt with empty request to trigger /clear.
-			_, _ = e.l3SessionClient().Prompt(ctx, "Session ended. Acknowledge with: "+
-				`{"decision":"allow","reasoning":"session ended"}`)
-		}()
-	}
-
 	return true
 }
 
@@ -1152,11 +1137,9 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 		e.l2Mu.RUnlock()
 	}
 
-	// L3: LLM evaluation (claudia session).
-	// Wait for background init if still in progress.
-	if result.Decision == policy.Escalate && e.l3Ready != nil {
-		<-e.l3Ready
-	}
+	// L3: LLM evaluation via `claude -p`. Synchronous — L3 is always
+	// available the moment the engine finishes construction, so
+	// there is no readiness check here.
 	if result.Decision == policy.Escalate && e.policyL3 != nil {
 		log.Printf("doit: L3 LLM call starting for %q", policyReq.Command)
 		t0 := time.Now()
