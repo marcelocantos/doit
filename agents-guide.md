@@ -32,16 +32,57 @@ interface for command execution.
 
 ## MCP tools
 
+### Core execution
+
 | Tool | Purpose |
 |---|---|
 | `doit_execute` | Execute a command through the policy engine |
 | `doit_dry_run` | Evaluate a command without executing (policy check only) |
-| `doit_policy_status` | Show policy engine state (enabled levels, rule counts) |
-| `doit_approve` | Validate an approval token for escalated commands |
+| `doit_approve` | Validate an approval token for a previously escalated command |
+
+### Work sessions
+
+| Tool | Purpose |
+|---|---|
+| `doit_session_start` | Start a work session with a declared scope. L3 evaluations during the session reuse the scope to decide faster and with more context. |
+| `doit_session_end` | End the active work session |
+| `doit_session_status` | Show the active session (or "no active session") |
+
+### Policy inspection and management
+
+| Tool | Purpose |
+|---|---|
+| `doit_policy_status` | Show policy engine state (enabled levels, rule counts, L3 models) |
+| `doit_policy_list` | List L2 learned policy entries (match criteria, decision, provenance, review schedule) |
+| `doit_policy_delete` | Delete an L2 learned entry by ID |
+| `doit_policy_review` | List L2 entries that are overdue for review |
+| `doit_self_audit` | Run a self-audit of the rule set — contradictions, stale entries, missing Starlark IDs, duplicate coverage |
 | `doit_list_capabilities` | List registered capabilities and their tiers |
+
+### Audit log
+
+| Tool | Purpose |
+|---|---|
 | `doit_audit_verify` | Verify audit log hash chain integrity |
 | `doit_audit_tail` | Show recent audit log entries |
+
+### Deployment and context
+
+| Tool | Purpose |
+|---|---|
 | `doit_check_config` | Verify deployment config (Bash denied, doit registered) |
+| `doit_repo_read` | Read an allowlisted project file (`.gitignore`, `Makefile`, `go.mod`, `package.json`, `Cargo.toml`, `pyproject.toml`, `CLAUDE.md`, `.doit/config.yaml`) for claim verification during L3 reasoning |
+
+## Work sessions
+
+When you're about to do a coherent chunk of work — e.g., "build and test doit
+in `~/work/.../doit`" — call `doit_session_start` first with a narrow `scope`
+and one-paragraph `description`. L3 evaluations inside the session reuse the
+scope, so subsequent commands that fit the declared work are approved faster
+and with more accurate reasoning. Call `doit_session_end` when you're done.
+
+Sessions auto-expire after `timeout_minutes` (default 30). Use
+`doit_session_status` to check the active session.
 
 ## Executing commands
 

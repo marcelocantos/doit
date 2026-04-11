@@ -55,19 +55,50 @@ automatically.
 
 ## MCP tools
 
+**Core execution**
+
 | Tool | Purpose |
 |---|---|
 | `doit_execute` | Execute a command through the policy engine |
 | `doit_dry_run` | Evaluate a command without executing (policy check only) |
+| `doit_approve` | Validate an approval token for an escalated command |
+
+**Work sessions** — declare a scope so L3 evaluations reuse it for faster decisions
+
+| Tool | Purpose |
+|---|---|
+| `doit_session_start` | Start a scoped work session |
+| `doit_session_end` | End the active session |
+| `doit_session_status` | Show the active session |
+
+**Policy inspection and management**
+
+| Tool | Purpose |
+|---|---|
 | `doit_policy_status` | Show policy engine state |
-| `doit_approve` | Validate an approval token for escalated commands |
+| `doit_policy_list` | List L2 learned policy entries |
+| `doit_policy_delete` | Delete an L2 entry by ID |
+| `doit_policy_review` | List L2 entries overdue for review |
+| `doit_self_audit` | Audit the rule set for contradictions, stale entries, and missing Starlark IDs |
 | `doit_list_capabilities` | List capabilities and their safety tiers |
+
+**Audit log**
+
+| Tool | Purpose |
+|---|---|
 | `doit_audit_verify` | Verify audit log hash chain integrity |
 | `doit_audit_tail` | Show recent audit log entries |
+
+**Deployment and context**
+
+| Tool | Purpose |
+|---|---|
 | `doit_check_config` | Verify deployment config (Bash denied, doit registered) |
+| `doit_repo_read` | Read an allowlisted project file for L3 claim verification |
 
 Commands are passed as shell strings and executed via `sh -c`, so shell
-features (pipes, redirects, `&&`, `||`) work naturally.
+features (pipes, redirects, `&&`, `||`) work naturally — doit does not parse
+the command at the engine level, leaving composition to the shell.
 
 ## Safety tiers
 
