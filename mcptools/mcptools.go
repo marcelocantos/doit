@@ -21,6 +21,7 @@ import (
 
 	"github.com/marcelocantos/doit/engine"
 	"github.com/marcelocantos/doit/internal/audit"
+	doitctx "github.com/marcelocantos/doit/internal/context"
 	"github.com/marcelocantos/doit/internal/policy"
 )
 
@@ -113,6 +114,20 @@ func Register(srv *server.MCPServer, eng *engine.Engine) {
 			mcp.WithString("id", mcp.Required(), mcp.Description("The policy entry ID to delete")),
 		),
 		handlePolicyDelete(eng),
+	)
+
+	// Repo read tool (🎯T15) — read-only access to a hardcoded allowlist of
+	// project files for claim verification.
+	srv.AddTool(
+		mcp.NewTool("doit_repo_read",
+			mcp.WithDescription("Read a file from the project repository for claim verification. "+
+				"Only files in the hardcoded allowlist are accessible: "+
+				".gitignore, Makefile, go.mod, package.json, Cargo.toml, pyproject.toml, CLAUDE.md, .doit/config.yaml. "+
+				"Returns the file contents or an error if the file is not allowed or does not exist."),
+			mcp.WithString("filename", mcp.Required(), mcp.Description("File to read (must be in the allowlist)")),
+			mcp.WithString("project_root", mcp.Description("Project root directory (defaults to engine project root or cwd)")),
+		),
+		handleRepoRead(eng),
 	)
 
 	// Deployment verification tool.
@@ -455,6 +470,33 @@ func handlePolicyDelete(eng *engine.Engine) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(fmt.Sprintf("Delete failed: %v", err)), nil
 		}
 		return mcp.NewToolResultText(fmt.Sprintf("Deleted policy entry %q.", id)), nil
+	}
+}
+
+func handleRepoRead(eng *engine.Engine) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		filename := argString(args, "filename")
+		if filename == "" {
+			return mcp.NewToolResultError("missing required parameter: filename"), nil
+		}
+
+		projectRoot := argString(args, "project_root")
+		if projectRoot == "" {
+			// Fall back to cwd. (The engine's ProjectRoot is not stored separately;
+			// callers should pass project_root explicitly when known.)
+			var err error
+			projectRoot, err = os.Getwd()
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("cannot determine project root: %v", err)), nil
+			}
+		}
+
+		data, err := doitctx.ReadRepoFile(projectRoot, filename)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultText(string(data)), nil
 	}
 }
 
