@@ -21,6 +21,7 @@ import (
 
 	"github.com/marcelocantos/doit/engine"
 	"github.com/marcelocantos/doit/internal/audit"
+	doitctx "github.com/marcelocantos/doit/internal/context"
 	"github.com/marcelocantos/doit/internal/policy"
 )
 
@@ -113,6 +114,67 @@ func Register(srv *server.MCPServer, eng *engine.Engine) {
 			mcp.WithString("id", mcp.Required(), mcp.Description("The policy entry ID to delete")),
 		),
 		handlePolicyDelete(eng),
+	)
+
+	// Policy review and self-audit tools.
+	srv.AddTool(
+		mcp.NewTool("doit_policy_review",
+			mcp.WithDescription("List L2 learned policy entries that are overdue for review. "+
+				"Returns entries with their match criteria, decision, reasoning, and review schedule."),
+		),
+		handlePolicyReview(eng),
+	)
+
+	srv.AddTool(
+		mcp.NewTool("doit_self_audit",
+			mcp.WithDescription("Run a self-audit of the policy rule set. "+
+				"Detects contradictions between L1 and L2 rules, stale entries overdue by 90+ days, "+
+				"Starlark rule IDs referenced but not loaded, and duplicate L2 coverage. "+
+				"Returns findings with severity markers (error/warning/info)."),
+		),
+		handleSelfAudit(eng),
+	)
+
+	// Session management tools.
+	srv.AddTool(
+		mcp.NewTool("doit_session_start",
+			mcp.WithDescription("Start a work session. During a session, L3 policy evaluations "+
+				"accumulate context for faster, more informed decisions. Commands within the declared "+
+				"scope are evaluated with session awareness. Sessions auto-expire after timeout."),
+			mcp.WithString("scope", mcp.Required(), mcp.Description("The scope of work (e.g. 'go development in pkg/util', 'frontend React refactoring')")),
+			mcp.WithString("description", mcp.Description("Detailed description of the work being done")),
+			mcp.WithNumber("timeout_minutes", mcp.Description("Session timeout in minutes (default 30)")),
+		),
+		handleSessionStart(eng),
+	)
+
+	srv.AddTool(
+		mcp.NewTool("doit_session_end",
+			mcp.WithDescription("End an active work session. Resumes per-command context clearing for L3 evaluations."),
+			mcp.WithString("session_id", mcp.Description("Session ID to end (ends any active session if omitted)")),
+		),
+		handleSessionEnd(eng),
+	)
+
+	srv.AddTool(
+		mcp.NewTool("doit_session_status",
+			mcp.WithDescription("Get the current work session status, or 'no active session' if none is active."),
+		),
+		handleSessionStatus(eng),
+	)
+
+	// Repo read tool (🎯T15) — read-only access to a hardcoded allowlist of
+	// project files for claim verification.
+	srv.AddTool(
+		mcp.NewTool("doit_repo_read",
+			mcp.WithDescription("Read a file from the project repository for claim verification. "+
+				"Only files in the hardcoded allowlist are accessible: "+
+				".gitignore, Makefile, go.mod, package.json, Cargo.toml, pyproject.toml, CLAUDE.md, .doit/config.yaml. "+
+				"Returns the file contents or an error if the file is not allowed or does not exist."),
+			mcp.WithString("filename", mcp.Required(), mcp.Description("File to read (must be in the allowlist)")),
+			mcp.WithString("project_root", mcp.Description("Project root directory (defaults to engine project root or cwd)")),
+		),
+		handleRepoRead(eng),
 	)
 
 	// Deployment verification tool.
@@ -455,6 +517,137 @@ func handlePolicyDelete(eng *engine.Engine) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(fmt.Sprintf("Delete failed: %v", err)), nil
 		}
 		return mcp.NewToolResultText(fmt.Sprintf("Deleted policy entry %q.", id)), nil
+	}
+}
+
+func handleSessionStart(eng *engine.Engine) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		scope := argString(args, "scope")
+		if scope == "" {
+			return mcp.NewToolResultError("missing required parameter: scope"), nil
+		}
+		description := argString(args, "description")
+
+		timeoutMinutes := 30.0
+		if n, ok := args["timeout_minutes"].(float64); ok && n > 0 {
+			timeoutMinutes = n
+		}
+		timeout := time.Duration(timeoutMinutes) * time.Minute
+
+		id, err := eng.StartSession(scope, description, timeout)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to start session: %v", err)), nil
+		}
+
+		resp := map[string]any{
+			"session_id":      id,
+			"scope":           scope,
+			"description":     description,
+			"timeout_minutes": timeoutMinutes,
+		}
+		data, _ := json.MarshalIndent(resp, "", "  ")
+		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+func handleSessionEnd(eng *engine.Engine) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id := argString(req.GetArguments(), "session_id")
+		if eng.EndSession(id) {
+			return mcp.NewToolResultText("Session ended."), nil
+		}
+		if id != "" {
+			return mcp.NewToolResultError(fmt.Sprintf("No active session with ID %q", id)), nil
+		}
+		return mcp.NewToolResultText("No active session to end."), nil
+	}
+}
+
+func handleSessionStatus(eng *engine.Engine) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		ws := eng.ActiveSession()
+		if ws == nil {
+			return mcp.NewToolResultText("No active session."), nil
+		}
+		remaining := ws.Timeout - time.Since(ws.StartedAt)
+		resp := map[string]any{
+			"session_id":        ws.ID,
+			"scope":             ws.Scope,
+			"description":       ws.Description,
+			"started_at":        ws.StartedAt.Format(time.RFC3339),
+			"remaining_minutes": int(remaining.Minutes()),
+		}
+		data, _ := json.MarshalIndent(resp, "", "  ")
+		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+func handlePolicyReview(eng *engine.Engine) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		overdue, err := eng.OverdueReviews()
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to load policy store: %v", err)), nil
+		}
+		if len(overdue) == 0 {
+			return mcp.NewToolResultText("No policy entries due for review."), nil
+		}
+		data, _ := json.MarshalIndent(overdue, "", "  ")
+		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+func handleSelfAudit(eng *engine.Engine) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		findings, err := eng.SelfAudit()
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Self-audit failed: %v", err)), nil
+		}
+		if len(findings) == 0 {
+			return mcp.NewToolResultText("Self-audit: no issues found."), nil
+		}
+
+		var b strings.Builder
+		for _, f := range findings {
+			var marker string
+			switch f.Severity {
+			case "error":
+				marker = "[ERROR]"
+			case "warning":
+				marker = "[WARN] "
+			default:
+				marker = "[INFO] "
+			}
+			fmt.Fprintf(&b, "%s [%s] %s\n", marker, f.Category, f.Description)
+		}
+		return mcp.NewToolResultText(b.String()), nil
+	}
+}
+
+func handleRepoRead(eng *engine.Engine) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		filename := argString(args, "filename")
+		if filename == "" {
+			return mcp.NewToolResultError("missing required parameter: filename"), nil
+		}
+
+		projectRoot := argString(args, "project_root")
+		if projectRoot == "" {
+			// Fall back to cwd. (The engine's ProjectRoot is not stored separately;
+			// callers should pass project_root explicitly when known.)
+			var err error
+			projectRoot, err = os.Getwd()
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("cannot determine project root: %v", err)), nil
+			}
+		}
+
+		data, err := doitctx.ReadRepoFile(projectRoot, filename)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultText(string(data)), nil
 	}
 }
 

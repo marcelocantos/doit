@@ -237,3 +237,111 @@ func TestLevel3EvaluateInvalidResponse(t *testing.T) {
 		t.Errorf("reason %q should contain 'unparseable'", result.Reason)
 	}
 }
+
+// mockSessionPrompter implements both Prompter and SessionPrompter.
+type mockSessionPrompter struct {
+	response  string
+	err       error
+	called    bool
+	inSession bool
+}
+
+func (m *mockSessionPrompter) Prompt(_ context.Context, _ string) (string, error) {
+	m.called = true
+	m.inSession = false
+	return m.response, m.err
+}
+
+func (m *mockSessionPrompter) PromptWithinSession(_ context.Context, _ string) (string, error) {
+	m.called = true
+	m.inSession = true
+	return m.response, m.err
+}
+
+func TestLevel3EvaluateInSession(t *testing.T) {
+	mock := &mockSessionPrompter{response: `{"decision":"allow","reasoning":"within scope"}`}
+	l3 := NewLevel3(mock)
+
+	session := &SessionContext{
+		Scope:       "go development",
+		Description: "writing tests",
+	}
+
+	result := l3.EvaluateInSession(context.Background(), &Request{
+		Command:  "make test",
+		Segments: []Segment{{CapName: "make", Args: []string{"test"}, Tier: cap.TierBuild}},
+	}, session)
+
+	if result.Decision != Allow {
+		t.Errorf("decision = %v, want Allow", result.Decision)
+	}
+	if result.RuleID != "llm-gatekeeper-session" {
+		t.Errorf("ruleID = %q, want llm-gatekeeper-session", result.RuleID)
+	}
+	if !mock.inSession {
+		t.Error("expected PromptWithinSession to be called, not Prompt")
+	}
+}
+
+func TestLevel3EvaluateInSessionFallback(t *testing.T) {
+	// When the client doesn't implement SessionPrompter, it should
+	// fall back to regular Prompt.
+	mock := &mockPrompter{response: `{"decision":"allow","reasoning":"ok"}`}
+	l3 := NewLevel3(mock)
+
+	session := &SessionContext{
+		Scope: "test scope",
+	}
+
+	result := l3.EvaluateInSession(context.Background(), &Request{
+		Command: "cat foo.txt",
+	}, session)
+
+	if result.Decision != Allow {
+		t.Errorf("decision = %v, want Allow", result.Decision)
+	}
+	if !mock.called {
+		t.Error("expected Prompt to be called as fallback")
+	}
+}
+
+func TestLevel3EvaluateInSessionRetry(t *testing.T) {
+	mock := &mockSessionPrompter{}
+	l3 := NewLevel3(mock)
+
+	session := &SessionContext{Scope: "test"}
+
+	result := l3.EvaluateInSession(context.Background(), &Request{
+		Command: "rm -rf .",
+		Retry:   true,
+	}, session)
+
+	if mock.called {
+		t.Error("Prompt should not be called when req.Retry is true")
+	}
+	if result.Decision != Allow {
+		t.Errorf("decision = %v, want Allow", result.Decision)
+	}
+}
+
+func TestBuildSessionPrefix(t *testing.T) {
+	session := &SessionContext{
+		Scope:       "Go backend development",
+		Description: "writing unit tests for the policy engine",
+	}
+
+	prefix := buildSessionPrefix(session)
+
+	if !strings.Contains(prefix, "WORK SESSION CONTEXT") {
+		t.Error("prefix should contain session header")
+	}
+	if !strings.Contains(prefix, "Go backend development") {
+		t.Error("prefix should contain scope")
+	}
+	if !strings.Contains(prefix, "writing unit tests") {
+		t.Error("prefix should contain description")
+	}
+	if !strings.Contains(prefix, "within the declared scope") {
+		t.Error("prefix should contain scope instructions")
+	}
+}

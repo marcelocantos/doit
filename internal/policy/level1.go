@@ -116,6 +116,63 @@ func (l *Level1) Rules() []Rule {
 	return l.rules
 }
 
+// AddProjectContextRules inserts auto-allow rules for safeCommands derived
+// from project context discovery (🎯T13). Rules are inserted before the
+// Starlark evaluation step so that project-specific safe commands are decided
+// deterministically at L1.
+//
+// safeCommands is a list of command prefixes (e.g. "go test", "make") that
+// should be auto-allowed. Each entry is matched against the first one or two
+// tokens of the command string.
+func (l *Level1) AddProjectContextRules(projectType string, safeCommands []string) {
+	if len(safeCommands) == 0 {
+		return
+	}
+
+	// Build a set of (cap, optional-subcommand) pairs for fast lookup.
+	type cmdKey struct{ cap, sub string }
+	allowed := make(map[cmdKey]bool, len(safeCommands))
+	for _, sc := range safeCommands {
+		parts := strings.Fields(sc)
+		if len(parts) == 0 {
+			continue
+		}
+		cap := parts[0]
+		sub := ""
+		if len(parts) > 1 {
+			sub = parts[1]
+		}
+		allowed[cmdKey{cap, sub}] = true
+	}
+
+	rule := Rule{
+		ID:          fmt.Sprintf("allow-project-safe-commands-%s", projectType),
+		Description: fmt.Sprintf("Auto-allow safe commands for %s project", projectType),
+		Check: func(req *Request) *Result {
+			for _, seg := range req.Segments {
+				sub := ""
+				if len(seg.Args) > 0 {
+					sub = seg.Args[0]
+				}
+				// Match cap+sub first, fall back to cap-only.
+				if allowed[cmdKey{seg.CapName, sub}] || allowed[cmdKey{seg.CapName, ""}] {
+					return &Result{
+						Decision: Allow,
+						Level:    1,
+						Reason:   fmt.Sprintf("safe command for %s project", projectType),
+						RuleID:   fmt.Sprintf("allow-project-safe-commands-%s", projectType),
+					}
+				}
+			}
+			return nil
+		},
+	}
+
+	// Insert before Starlark evaluation (i.e., at the end of the Go-rule slice,
+	// since Starlark is evaluated after the Go rules loop in Evaluate()).
+	l.rules = append(l.rules, rule)
+}
+
 // StarlarkRuleCount returns the number of loaded Starlark rules.
 func (l *Level1) StarlarkRuleCount() int {
 	if l.starlark == nil {
