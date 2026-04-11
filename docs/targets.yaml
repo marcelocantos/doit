@@ -10,7 +10,7 @@ targets:
     discovered: 2026-04-09
   T10:
     name: L3→L2 auto-promotion detects stable patterns from decision history
-    status: identified
+    status: achieved
     value: 3.0
     cost: 3.0
     acceptance:
@@ -24,9 +24,10 @@ targets:
     - claudia
     origin: roadmap — docs/todo.md Policy Migration
     discovered: 2026-04-10
+    achieved: 2026-04-11
   T11:
     name: Spaced repetition review keeps learned policy fresh
-    status: identified
+    status: achieved
     value: 3.0
     cost: 2.0
     acceptance:
@@ -39,9 +40,10 @@ targets:
     - policy
     origin: roadmap — design doc
     discovered: 2026-04-10
+    achieved: 2026-04-11
   T12:
     name: Gatekeeper self-audit detects dangerous rule combinations and drift
-    status: identified
+    status: achieved
     value: 2.0
     cost: 3.0
     acceptance:
@@ -56,9 +58,10 @@ targets:
     - claudia
     origin: roadmap — docs/todo.md Gatekeeper Self-Audit
     discovered: 2026-04-10
+    achieved: 2026-04-11
   T13:
     name: Project context auto-discovery informs policy decisions
-    status: identified
+    status: achieved
     value: 3.0
     cost: 2.0
     acceptance:
@@ -72,9 +75,10 @@ targets:
     - context
     origin: roadmap — docs/todo.md Global vs Repo-Level Policy
     discovered: 2026-04-10
+    achieved: 2026-04-11
   T14:
     name: Session-scoped gatekeeper uses claudia for context-aware triage
-    status: identified
+    status: achieved
     value: 5.0
     cost: 3.0
     acceptance:
@@ -90,9 +94,10 @@ targets:
     - claudia
     origin: roadmap — docs/todo.md Gatekeeper Capabilities
     discovered: 2026-04-10
+    achieved: 2026-04-11
   T15:
     name: Gatekeeper has read-only repo access for claim verification
-    status: identified
+    status: achieved
     value: 2.0
     cost: 2.0
     acceptance:
@@ -106,6 +111,7 @@ targets:
     - safety
     origin: roadmap — docs/todo.md Gatekeeper Capabilities
     discovered: 2026-04-10
+    achieved: 2026-04-11
   T16:
     name: doit is the sole execution path — agents have no direct Bash access
     status: achieved
@@ -207,7 +213,7 @@ targets:
     achieved: 2026-04-11
   T9:
     name: Rule promotion generates high-quality Starlark from L3 context
-    status: identified
+    status: achieved
     value: 3.0
     cost: 3.0
     acceptance:
@@ -222,3 +228,4 @@ targets:
     - claudia
     origin: roadmap — STABILITY.md 1.0 gap
     discovered: 2026-04-10
+    achieved: 2026-04-11

@@ -2,6 +2,10 @@
 
 ## Active
 
+(none)
+
+## Achieved
+
 ### 🎯T10 L3→L2 auto-promotion detects stable patterns from decision history
 - **Value**: 3
 - **Cost**: 3
@@ -13,8 +17,9 @@
 - **Context**: The claudia session (🎯T8) can analyse L3 decision history for patterns. Instead of simple audit log analysis, the agent uses semantic understanding to cluster similar decisions and propose L2 entries. Runs as a periodic task within the existing claudia session.
 - **Tags**: policy, claudia
 - **Origin**: roadmap — docs/todo.md Policy Migration
-- **Status**: Identified
+- **Status**: Achieved
 - **Discovered**: 2026-04-10
+- **Achieved**: 2026-04-11
 
 ### 🎯T11 Spaced repetition review keeps learned policy fresh
 - **Value**: 3
@@ -27,8 +32,9 @@
 - **Context**: L2 entries have ReviewSchedule fields but review is never triggered. Without periodic review, learned policy accumulates stale entries that don't reflect current project reality. Design doc section: Spaced Repetition Review.
 - **Tags**: policy
 - **Origin**: roadmap — design doc
-- **Status**: Identified
+- **Status**: Achieved
 - **Discovered**: 2026-04-10
+- **Achieved**: 2026-04-11
 
 ### 🎯T12 Gatekeeper self-audit detects dangerous rule combinations and drift
 - **Value**: 2
@@ -41,8 +47,9 @@
 - **Context**: The claudia session (🎯T8) can perform holistic rule set review. The agent reads all L1 Starlark rules and L2 entries, reasons about interactions, and flags dangerous combinations or drift. Runs as a periodic or on-demand task.
 - **Tags**: policy, safety, claudia
 - **Origin**: roadmap — docs/todo.md Gatekeeper Self-Audit
-- **Status**: Identified
+- **Status**: Achieved
 - **Discovered**: 2026-04-10
+- **Achieved**: 2026-04-11
 
 ### 🎯T13 Project context auto-discovery informs policy decisions
 - **Value**: 3
@@ -55,8 +62,9 @@
 - **Context**: Currently doit treats all commands the same regardless of project context. A Go project should auto-allow go test, a Node project should allow npm test. Per-project config handles explicit rules but auto-discovery handles the common case. Design doc section: Global vs Repo-Level Policy.
 - **Tags**: policy, context
 - **Origin**: roadmap — docs/todo.md Global vs Repo-Level Policy
-- **Status**: Identified
+- **Status**: Achieved
 - **Discovered**: 2026-04-10
+- **Achieved**: 2026-04-11
 
 ### 🎯T14 Session-scoped gatekeeper uses claudia for context-aware triage
 - **Value**: 5
@@ -70,8 +78,9 @@
 - **Context**: With L3 already running as a persistent claudia session (🎯T8), the session agent becomes an extension: workers can introduce a work session with scope/description, and the existing claudia session accumulates that context across evaluations (skip /clear for within-session commands). This builds on top of the L3 claudia integration rather than being a separate system.
 - **Tags**: policy, agent, claudia
 - **Origin**: roadmap — docs/todo.md Gatekeeper Capabilities
-- **Status**: Identified
+- **Status**: Achieved
 - **Discovered**: 2026-04-10
+- **Achieved**: 2026-04-11
 
 ### 🎯T15 Gatekeeper has read-only repo access for claim verification
 - **Value**: 2
@@ -84,24 +93,9 @@
 - **Context**: When an agent claims 'this directory is generated, safe to delete', the gatekeeper currently takes it at face value. With repo access, it can verify claims against .gitignore, build configs, etc.
 - **Tags**: policy, safety
 - **Origin**: roadmap — docs/todo.md Gatekeeper Capabilities
-- **Status**: Identified
+- **Status**: Achieved
 - **Discovered**: 2026-04-10
-
-### 🎯T9 Rule promotion generates high-quality Starlark from L3 context
-- **Value**: 3
-- **Cost**: 3
-- **Acceptance**:
-  - Phase 2 elicitation rule proposals include L3 reasoning context
-  - Generated Starlark rules handle edge cases (combined flags, flag=value syntax)
-  - Generated rules include comprehensive test cases covering allow and deny paths
-  - ProposeRules uses command semantics (not just string splitting) to determine generality levels
-- **Context**: With L3 running as a claudia session, rule promotion can leverage the agent's full reasoning capability. Instead of simple string splitting, the claudia session generates Starlark rules with semantic understanding of the command, its flags, and the project context. The agent proposes rules at varying generality levels for the phase 2 elicitation.
-- **Tags**: policy, starlark, claudia
-- **Origin**: roadmap — STABILITY.md 1.0 gap
-- **Status**: Identified
-- **Discovered**: 2026-04-10
-
-## Achieved
+- **Achieved**: 2026-04-11
 
 ### 🎯T16 doit is the sole execution path — agents have no direct Bash access
 - **Value**: 8
@@ -131,6 +125,21 @@
   - Session is gracefully shut down when the engine stops
 - **Context**: Instead of a raw LLM API client, L3 uses a persistent claudia session (github.com/marcelocantos/claudia). The session starts with the engine and persists for its lifetime. Each evaluation sends a prompt, gets a decision, then /clear resets context. This gives L3 full Claude Code capabilities (file reading, project context) while maintaining clean evaluation boundaries. Collapses the old L3-as-API-call and session-agent concepts into one architecture.
 - **Tags**: policy, llm, claudia
+- **Origin**: roadmap — STABILITY.md 1.0 gap
+- **Status**: Achieved
+- **Discovered**: 2026-04-10
+- **Achieved**: 2026-04-11
+
+### 🎯T9 Rule promotion generates high-quality Starlark from L3 context
+- **Value**: 3
+- **Cost**: 3
+- **Acceptance**:
+  - Phase 2 elicitation rule proposals include L3 reasoning context
+  - Generated Starlark rules handle edge cases (combined flags, flag=value syntax)
+  - Generated rules include comprehensive test cases covering allow and deny paths
+  - ProposeRules uses command semantics (not just string splitting) to determine generality levels
+- **Context**: With L3 running as a claudia session, rule promotion can leverage the agent's full reasoning capability. Instead of simple string splitting, the claudia session generates Starlark rules with semantic understanding of the command, its flags, and the project context. The agent proposes rules at varying generality levels for the phase 2 elicitation.
+- **Tags**: policy, starlark, claudia
 - **Origin**: roadmap — STABILITY.md 1.0 gap
 - **Status**: Achieved
 - **Discovered**: 2026-04-10
@@ -191,16 +200,3 @@
 - **Acceptance**: TODO
 - **Status**: Achieved
 - **Discovered**: 2026-04-09
-
-## Graph
-
-```mermaid
-graph TD
-    T10["L3→L2 auto-promotion detects …"]
-    T11["Spaced repetition review keep…"]
-    T12["Gatekeeper self-audit detects…"]
-    T13["Project context auto-discover…"]
-    T14["Session-scoped gatekeeper use…"]
-    T15["Gatekeeper has read-only repo…"]
-    T9["Rule promotion generates high…"]
-```
