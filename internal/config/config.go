@@ -29,7 +29,8 @@ type PolicyConfig struct {
 	Level2Enabled    bool   `yaml:"level2_enabled"`
 	Level2Path       string `yaml:"level2_path,omitempty"`
 	Level3Enabled    bool   `yaml:"level3_enabled"`
-	Level3Model      string `yaml:"level3_model,omitempty"`
+	Level3FastModel  string `yaml:"level3_fast_model,omitempty"`  // fast triage model (default: sonnet)
+	Level3Model      string `yaml:"level3_model,omitempty"`       // deep reasoning model (default: opus)
 	Level3Timeout    string `yaml:"level3_timeout,omitempty"`
 	StarlarkRulesDir string `yaml:"starlark_rules_dir,omitempty"`
 }

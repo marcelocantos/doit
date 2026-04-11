@@ -106,7 +106,7 @@ func TestBuildPrompt(t *testing.T) {
 		SafetyArg:      "reviewed all commits",
 	}
 
-	prompt := buildPrompt(req)
+	prompt := buildPrompt(req, false)
 
 	checks := []string{
 		"git push origin master",
@@ -160,8 +160,8 @@ func TestLevel3EvaluateAllow(t *testing.T) {
 	if result.Level != 3 {
 		t.Errorf("level = %d, want 3", result.Level)
 	}
-	if result.RuleID != "llm-gatekeeper" {
-		t.Errorf("ruleID = %q, want llm-gatekeeper", result.RuleID)
+	if result.RuleID != "llm-gatekeeper-fast" {
+		t.Errorf("ruleID = %q, want llm-gatekeeper-fast", result.RuleID)
 	}
 }
 
@@ -274,8 +274,8 @@ func TestLevel3EvaluateInSession(t *testing.T) {
 	if result.Decision != Allow {
 		t.Errorf("decision = %v, want Allow", result.Decision)
 	}
-	if result.RuleID != "llm-gatekeeper-session" {
-		t.Errorf("ruleID = %q, want llm-gatekeeper-session", result.RuleID)
+	if result.RuleID != "llm-gatekeeper-session-fast" {
+		t.Errorf("ruleID = %q, want llm-gatekeeper-session-fast", result.RuleID)
 	}
 	if !mock.inSession {
 		t.Error("expected PromptWithinSession to be called, not Prompt")

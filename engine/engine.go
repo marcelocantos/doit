@@ -98,7 +98,8 @@ type Engine struct {
 	policyL1   *policy.Level1
 	policyL2   *policy.Level2
 	policyL3   *policy.Level3
-	l3Client   *llm.ClaudiaClient // persistent claudia session for L3
+	l3Fast     *llm.ClaudiaClient // fast triage session (sonnet)
+	l3Deep     *llm.ClaudiaClient // deep reasoning session (opus) — may be nil
 	tokenStore *policy.TokenStore
 	storePath  string
 	promoteCh  chan struct{}
@@ -219,22 +220,43 @@ func New(opts Options, engineOpts ...EngineOption) (*Engine, error) {
 		}
 	}
 
-	// L3: LLM gatekeeper (persistent claudia session).
+	// L3: LLM gatekeeper (two-tier claudia sessions: fast + deep).
 	if cfg.Policy.Level3Enabled {
 		workDir := opts.ProjectRoot
 		if workDir == "" {
 			workDir, _ = os.Getwd()
 		}
-		client := llm.NewClaudiaClient(
-			cfg.Policy.Level3Model,
-			workDir,
-			cfg.Policy.Level3TimeoutDuration(),
-		)
-		if err := client.Start(); err != nil {
-			log.Printf("doit: engine: claudia session: %v (L3 disabled)", err)
+		timeout := cfg.Policy.Level3TimeoutDuration()
+
+		// Fast tier (sonnet by default).
+		fastModel := cfg.Policy.Level3FastModel
+		if fastModel == "" {
+			fastModel = "sonnet"
+		}
+		fastClient := llm.NewClaudiaClient(fastModel, workDir, timeout)
+		if err := fastClient.Start(); err != nil {
+			log.Printf("doit: engine: L3 fast session (%s): %v (L3 disabled)", fastModel, err)
 		} else {
-			e.l3Client = client
-			e.policyL3 = policy.NewLevel3(client)
+			e.l3Fast = fastClient
+
+			// Deep tier (opus by default) — optional.
+			deepModel := cfg.Policy.Level3Model
+			if deepModel == "" {
+				deepModel = "opus"
+			}
+			if deepModel != fastModel {
+				deepClient := llm.NewClaudiaClient(deepModel, workDir, timeout)
+				if err := deepClient.Start(); err != nil {
+					log.Printf("doit: engine: L3 deep session (%s): %v (using fast model only)", deepModel, err)
+					e.policyL3 = policy.NewLevel3(fastClient)
+				} else {
+					e.l3Deep = deepClient
+					e.policyL3 = policy.NewLevel3(fastClient, deepClient)
+				}
+			} else {
+				// Same model for both tiers — single-tier mode.
+				e.policyL3 = policy.NewLevel3(fastClient)
+			}
 			e.tokenStore = policy.NewTokenStore(policy.DefaultTokenTTL)
 		}
 	}
@@ -249,10 +271,23 @@ func New(opts Options, engineOpts ...EngineOption) (*Engine, error) {
 // Close shuts down engine resources, including the persistent claudia session.
 func (e *Engine) Close() {
 	e.EndSession("") // end any active session
-	if e.l3Client != nil {
-		e.l3Client.Close()
-		e.l3Client = nil
+	if e.l3Fast != nil {
+		e.l3Fast.Close()
+		e.l3Fast = nil
 	}
+	if e.l3Deep != nil {
+		e.l3Deep.Close()
+		e.l3Deep = nil
+	}
+}
+
+// l3SessionClient returns the client to use for session interactions — the
+// deep model if available, otherwise the fast model.
+func (e *Engine) l3SessionClient() *llm.ClaudiaClient {
+	if e.l3Deep != nil {
+		return e.l3Deep
+	}
+	return e.l3Fast
 }
 
 // StartSession begins a work session. During a session, L3 evaluations
@@ -285,8 +320,8 @@ func (e *Engine) StartSession(scope, description string, timeout time.Duration) 
 
 	// Send session context to the claudia agent so it has awareness of
 	// the work scope. This message stays in context (no /clear).
-	if e.l3Client != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), e.l3Client.TimeoutDuration())
+	if e.l3SessionClient() != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), e.l3SessionClient().TimeoutDuration())
 		defer cancel()
 		sessionPrompt := fmt.Sprintf(
 			"WORK SESSION STARTED.\nScope: %s\nDescription: %s\n"+
@@ -297,7 +332,7 @@ func (e *Engine) StartSession(scope, description string, timeout time.Duration) 
 				"Respond with JSON as before.",
 			scope, description,
 		)
-		if _, err := e.l3Client.PromptWithinSession(ctx, sessionPrompt); err != nil {
+		if _, err := e.l3SessionClient().PromptWithinSession(ctx, sessionPrompt); err != nil {
 			log.Printf("doit: session: failed to prime claudia with session context: %v", err)
 			// Non-fatal: the session still works, just without priming.
 		}
@@ -322,12 +357,12 @@ func (e *Engine) EndSession(id string) bool {
 	log.Printf("doit: session ended: %s", ws.ID)
 
 	// Clear claudia context to resume per-command /clear behavior.
-	if e.l3Client != nil {
+	if e.l3SessionClient() != nil {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			// Use regular Prompt with empty request to trigger /clear.
-			_, _ = e.l3Client.Prompt(ctx, "Session ended. Acknowledge with: "+
+			_, _ = e.l3SessionClient().Prompt(ctx, "Session ended. Acknowledge with: "+
 				`{"decision":"allow","reasoning":"session ended"}`)
 		}()
 	}

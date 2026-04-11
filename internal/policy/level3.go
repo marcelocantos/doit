@@ -22,14 +22,22 @@ type SessionPrompter interface {
 	PromptWithinSession(ctx context.Context, prompt string) (string, error)
 }
 
-// Level3 evaluates commands by asking an LLM gatekeeper.
+// Level3 evaluates commands by asking an LLM gatekeeper. It supports a
+// two-tier cascade: a fast model (sonnet) handles obvious cases, and a
+// deep model (opus) handles uncertain ones. If only one client is provided,
+// it acts as both tiers.
 type Level3 struct {
-	client Prompter
+	fast Prompter // fast triage (sonnet) — required
+	deep Prompter // deep reasoning (opus) — optional, falls back to fast
 }
 
-// NewLevel3 creates a Level3 engine using the given Prompter.
-func NewLevel3(client Prompter) *Level3 {
-	return &Level3{client: client}
+// NewLevel3 creates a Level3 engine. If deep is nil, fast handles everything.
+func NewLevel3(fast Prompter, deep ...Prompter) *Level3 {
+	l := &Level3{fast: fast}
+	if len(deep) > 0 && deep[0] != nil {
+		l.deep = deep[0]
+	}
+	return l
 }
 
 // SessionContext provides work session information for L3 evaluation.
@@ -59,8 +67,24 @@ func (l *Level3) evaluate(ctx context.Context, req *Request, session *SessionCon
 		}
 	}
 
-	prompt := buildPrompt(req)
+	// Tier 1: fast model triage.
+	fastResult := l.callLLM(ctx, req, session, l.fast, true)
+	if fastResult.Decision != Escalate {
+		// Fast model was confident — use its decision.
+		return fastResult
+	}
 
+	// Tier 2: deep model for uncertain cases.
+	if l.deep != nil {
+		return l.callLLM(ctx, req, session, l.deep, false)
+	}
+
+	// No deep model — return the fast model's escalation.
+	return fastResult
+}
+
+func (l *Level3) callLLM(ctx context.Context, req *Request, session *SessionContext, client Prompter, fast bool) *Result {
+	prompt := buildPrompt(req, fast)
 	if session != nil {
 		prompt = buildSessionPrefix(session) + prompt
 	}
@@ -70,13 +94,13 @@ func (l *Level3) evaluate(ctx context.Context, req *Request, session *SessionCon
 		err error
 	)
 	if session != nil {
-		if sp, ok := l.client.(SessionPrompter); ok {
+		if sp, ok := client.(SessionPrompter); ok {
 			raw, err = sp.PromptWithinSession(ctx, prompt)
 		} else {
-			raw, err = l.client.Prompt(ctx, prompt)
+			raw, err = client.Prompt(ctx, prompt)
 		}
 	} else {
-		raw, err = l.client.Prompt(ctx, prompt)
+		raw, err = client.Prompt(ctx, prompt)
 	}
 
 	if err != nil {
@@ -100,12 +124,16 @@ func (l *Level3) evaluate(ctx context.Context, req *Request, session *SessionCon
 	if session != nil {
 		ruleID = "llm-gatekeeper-session"
 	}
+	if fast {
+		ruleID += "-fast"
+	}
 
 	return &Result{
-		Decision: dec,
-		Level:    3,
-		Reason:   reasoning,
-		RuleID:   ruleID,
+		Decision:   dec,
+		Level:      3,
+		Reason:     reasoning,
+		RuleID:     ruleID,
+		Bypassable: true,
 	}
 }
 
@@ -123,12 +151,21 @@ func buildSessionPrefix(session *SessionContext) string {
 	return sb.String()
 }
 
-// buildPrompt constructs the prompt sent to the LLM.
-func buildPrompt(req *Request) string {
+// buildPrompt constructs the prompt sent to the LLM. When fast is true,
+// the prompt instructs the model to only decide when highly confident
+// and escalate anything uncertain — the deep model will handle those.
+func buildPrompt(req *Request, fast bool) string {
 	var sb strings.Builder
 
 	sb.WriteString("You are a security gatekeeper for a command execution broker. ")
-	sb.WriteString("Evaluate whether this command should be allowed, denied, or escalated to a human.\n\n")
+	sb.WriteString("Evaluate whether this command should be allowed, denied, or escalated.\n\n")
+
+	if fast {
+		sb.WriteString("IMPORTANT: You are the fast triage tier. Only decide (allow or deny) ")
+		sb.WriteString("when you are highly confident. If there is any ambiguity, nuance, or ")
+		sb.WriteString("context-dependence, respond with escalate — a more capable model will ")
+		sb.WriteString("handle the decision. Err on the side of escalating.\n\n")
+	}
 
 	sb.WriteString("Safety tiers (from least to most dangerous):\n")
 	sb.WriteString("  read      — read-only operations (grep, cat, find, ls)\n")
