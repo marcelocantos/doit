@@ -131,36 +131,64 @@ targets:
     discovered: 2026-04-10
     achieved: 2026-04-11
   T17:
-    name: L1 refuses to auto-allow any command that contains shell composition metacharacters
+    name: Engine treats commands as opaque strings; commands that match no specific L1 rule escalate to L2/L3
     status: identified
     value: 20.0
-    cost: 8.0
+    cost: 5.0
     observable: true
     acceptance:
-    - dry_run of 'ls && rm -rf /' is NOT allowed by allow-safe-pipeline (must escalate or deny)
-    - dry_run of 'ls; rm -rf /tmp/x' is NOT allowed by allow-safe-pipeline
-    - dry_run of 'cat foo | tee bar' is NOT allowed by allow-safe-pipeline (presence of `|` alone means composition the engine cannot reason about)
-    - dry_run of 'cat /etc/passwd > /tmp/stolen' is NOT allowed by allow-safe-pipeline
-    - dry_run of 'ls $(rm -rf /)' is NOT allowed by allow-safe-pipeline
-    - dry_run of 'ls `rm -rf /`' is NOT allowed by allow-safe-pipeline
-    - 'dry_run of bare read commands still auto-allows: ''ls'', ''git status'', ''cat foo'', ''grep -r TODO .'''
-    - Quoted metacharacters inside a single argument are handled sanely — `grep '&&' file` is still a single-segment read command (stretch goal; acceptable to deny initially and revisit)
-    - A regression test suite exists in internal/policy/level1_test.go (or similar) exercising every bypass listed above, and `go test ./...` passes
+    - checkSafePipeline is deleted from internal/policy/level1.go; there is no engine-level rule that auto-allows based on 'all segments are read-only' reasoning
+    - policy.Segment.Tier is no longer populated by engine.evaluatePolicy; the policy.Request carries the raw command string and whatever metadata L1 pattern rules want to reconstruct themselves
+    - dry_run of 'ls && rm -rf /' does NOT return allow L1 allow-safe-pipeline; decision is escalate (or deny by a specific rule)
+    - dry_run of 'cat /etc/passwd > /tmp/stolen' does NOT return allow L1; escalates
+    - dry_run of 'ls $(rm -rf /)' does NOT return allow L1; escalates
+    - dry_run of 'ls `rm -rf /`' does NOT return allow L1; escalates
+    - 'dry_run of ''echo hello'' (unknown capability) does NOT return allow L1; escalates (or denies with ''unknown capability: echo'')'
+    - dry_run of 'git push' (bare, no --force) does NOT return allow L1; escalates
+    - dry_run of bare 'ls' escalates unless a specific L1 rule has been added; do NOT add a whitelist to paper over this — L2 learns the pattern after one approval, or L3 reasons about it
+    - dry_run of 'git push --force' remains denied by deny-git-push-flags (specific L1 pattern rule, unchanged)
+    - dry_run of 'rm -rf /' remains denied by deny-rm-catastrophic (specific L1 pattern rule, unchanged)
+    - A regression test suite in internal/policy/level1_test.go exercises every bypass listed above (&&, ||, ;, |, >, <, $(...), backticks, process substitution, echo, bare git push) and confirms none return 'allow L1 allow-safe-pipeline'
+    - 'STABILITY.md is updated: the audit-log ''segments''/''tiers'' fields are documented as deprecated or empty post-T17 (they can remain in the schema for backwards compatibility but no new entries populate them)'
     context: |-
-      Post-v0.5.0, doit deliberately does NOT tokenize commands at the engine level — composition is delegated to the shell via `sh -c`. This was the right call for composition semantics, but it leaves `internal/policy/level1.go:251-266 checkSafePipeline` unsound: the rule iterates `req.Segments` and auto-allows if every segment is TierRead, but `engine/engine.go evaluatePolicy` always constructs `req.Segments` with exactly one element (the first token of the command) regardless of what else is in the string. So "all segments are read-only" is vacuously true for any command whose first word is a read-tier capability.
+      **Architectural shift, not a bug fix.** The pre-v0.5.0 design assumed doit would tokenise commands into Pipeline → Segments and make tier-based decisions per segment. v0.5.0 removed the pipeline parser (commit f3d5a2d) and delegated shell composition to `sh -c`, but left behind three vestigial structures that don't survive the shift:
 
-      Confirmed bypasses on v0.5.0 (verified by dry_run in the 2026-04-12 session):
-        - `ls && rm -rf /` → allow L1, Rule: allow-safe-pipeline, Segments: [ls]
-        - `cat /etc/passwd > /tmp/stolen` → allow L1, Rule: allow-safe-pipeline, Segments: [cat]
-        - `ls $(rm -rf /)` → allow L1, Rule: allow-safe-pipeline, Segments: [ls]
-        - `git push` (no flags) → allow L1, Rule: allow-safe-pipeline, Segments: [git]
-        - `echo hello` → allow L1 (unknown capability defaults to TierRead in evaluatePolicy, see 🎯T23)
+        1. `internal/policy/level1.go:251-266 checkSafePipeline` — iterates `req.Segments` and auto-allows if every segment is TierRead. Under v0.5.0, `req.Segments` is always length 1 (just `args[0]`), so "all segments are read-only" is vacuously true for any first-word-read-tier command.
+        2. `engine/engine.go evaluatePolicy` — constructs a single synthetic `policy.Segment{CapName, Args, Tier}` from `args[0]` and the capability registry. This is engine-level tokenisation pretending to be segment analysis.
+        3. `policy.Segment.Tier` threading through L1/L2 — every policy layer consumes a "tier" per segment, which is now just "tier of the first word".
 
-      Fix: tighten checkSafePipeline to refuse auto-allow whenever the raw command string contains any shell metacharacter the engine did not parse. Specifically, bail out (return nil to fall through to L2/L3) if req.Command contains any of: `&&`, `||`, `;`, `|`, `>`, `<`, `` ` ``, `$(`, `${`, `$[`, `&` (background), `(`, `)`, newline, CR. Commands with quoted metacharacters (`grep '&&' file`) are a known edge case — the simplest correct behaviour is to deny-then-escalate on any metacharacter, then let L2/L3 approve the quoted case. Revisit the edge case after the bypass is closed.
+      Why can't we fix this by parsing pipelines properly?
 
-      This fix does NOT re-introduce a tokenizer. It treats shell metacharacters as "I can't reason about this at L1, escalate" — consistent with the v0.5.0 "shell handles composition" model. T18 (redirects), T19 (command substitution), and T24 (capability-level Validate) are all subsumed by this single change — the same metacharacter rejection covers `>`, `$(`, and friends.
+        - Process substitution: `diff <(sort a) <(sort b)` — nested pipelines inside `<(...)` that share no structure with the outer command.
+        - Here-strings and here-docs: `cat <<< "data"`, `cat <<EOF\n...\nEOF`.
+        - `eval "rm -rf $VAR"` — the actual command is only constructed at runtime.
+        - `sh -c 'nested; composition'` — quoted shell passed as an argument to another shell.
+        - `$IFS` / `noglob` / readonly arrays — word-splitting rules that change per-shell.
+        - Function and alias expansion.
+        - Multi-line commands embedded in `$(...)`.
 
-      Tags: security, level1, critical, bypass
+      Only `bash` itself gets this right, and by the time you've invoked bash you're already running the command. Any parser doit embeds is a strictly weaker model of bash, and the gap is where the bypasses live.
+
+      The right move: **stop trying to parse.** The engine treats `req.Command` as an opaque string and hands it to the policy chain. Each layer decides how much of the string it wants to inspect:
+
+        - **L1**: pattern rules (Starlark or Go) that match the full command string against specific known-good or known-bad forms. `deny-rm-catastrophic`, `deny-git-push-flags`, `deny-git-reset-hard`, etc. These are *specific* patterns, not tier-based reasoning — they pattern-match the raw command string and return Allow/Deny/Escalate. Anything that doesn't match any L1 rule falls through.
+        - **L2**: learned patterns — already works this way. Matches against the full command string.
+        - **L3**: LLM reasons about the full command string in context. Already works this way.
+
+      **No whitelist.** The user explicitly rejected the "small Starlark whitelist for safe single-command forms" approach. Commands that don't match a specific deny rule escalate. L2 learns them after one approval; L3 reasons about novel ones. Cold-start latency is real but correctness matters more than an extra `claude -p` call on the first `ls`.
+
+      Concrete code changes:
+        - Delete `checkSafePipeline` and its `allow-safe-pipeline` rule registration in `Level1.NewLevel1`.
+        - Delete `allow-safe-pipeline` references in `level1_test.go`. Keep the positive test cases for specific deny rules.
+        - `engine.evaluatePolicy`: stop constructing `policy.Segment`; pass `policy.Request{Command: req.Command}` through the chain. If L1 rules still want a capability-name hint they can parse it themselves from the first word.
+        - `policy.Request.Segments` and `policy.Segment.Tier`: remove from the public policy API or mark deprecated. Update L1 pattern rules that read them to either scan the command string directly or read the first word.
+        - `audit.Entry.Segments`/`Tiers`: stop populating from new writes. Either drop the fields or let them always be empty. STABILITY.md notes the change.
+
+      This change subsumes 🎯T18 (redirects), 🎯T19 (command substitution), 🎯T23 (unknown-cap TierRead default), and 🎯T24 (capability Validate metacharacter rejection) — all four were symptoms of the same underlying "engine is parsing" mistake. They are retired as part of this reshape.
+
+      🎯T20 (per-subcommand tier) also collapses into this, but slightly differently — see T20.
+
+      Tags: security, architecture, critical, bypass
     tags:
     - security
     - parser
@@ -169,7 +197,7 @@ targets:
     discovered: 2026-04-11
   T18:
     name: Output redirection (&gt;, &gt;&gt;, &amp;&gt;) is recognized as a write operation
-    status: identified
+    status: achieved
     value: 13.0
     cost: 3.0
     acceptance:
@@ -189,9 +217,10 @@ targets:
     - critical
     origin: discovered during doit experimentation session 2026-04-11
     discovered: 2026-04-11
+    achieved: 2026-04-12
   T19:
     name: Command substitution ($(...) and backticks) is rejected or parsed recursively
-    status: identified
+    status: achieved
     value: 13.0
     cost: 5.0
     acceptance:
@@ -211,6 +240,7 @@ targets:
     - critical
     origin: discovered during doit experimentation session 2026-04-11
     discovered: 2026-04-11
+    achieved: 2026-04-12
   T2:
     name: sh -c execution model
     status: achieved
@@ -221,36 +251,40 @@ targets:
     origin: manual
     discovered: 2026-04-09
   T20:
-    name: git and go subcommand effective tier is computed at policy-evaluation time via Capability.EffectiveTier(args)
+    name: Per-subcommand tier helpers and unreachable Capability.Run() methods are deleted; tiers become advisory metadata only
     status: identified
-    value: 13.0
-    cost: 3.0
+    value: 8.0
+    cost: 2.0
     observable: true
     acceptance:
-    - dry_run of 'git commit -m x' reports tier write (not read)
-    - dry_run of 'git push' reports tier dangerous (not read)
-    - dry_run of 'git push --force' is denied by deny-git-push-flags OR dangerous-tier escalation — whichever fires first
-    - dry_run of 'git status' still reports tier read
-    - dry_run of 'go install ./cmd/doit' reports tier dangerous (not build)
-    - dry_run of 'go run ./cmd' reports tier dangerous
-    - dry_run of 'go test ./...' still reports tier build
-    - dry_run of 'go vet ./...' still reports tier build
-    - The cap.Capability interface gains an `EffectiveTier(args []string) Tier` method with a default implementation that returns Tier()
-    - Git and GoCmd override EffectiveTier to route through gitSubcommandTier() / goSubcommandTier() — those helpers become live code, not vestigial
-    - engine.evaluatePolicy uses EffectiveTier(args[1:]) to populate policy.Segment.Tier so the correct tier reaches L1/L2 rules
-    - A regression test in internal/policy/level1_test.go or engine_test.go verifies tier-per-subcommand via the engine path, not via capability.Run() (which is unreachable)
+    - gitSubcommandTier() is deleted from internal/cap/builtin/git.go
+    - goSubcommandTier() is deleted from internal/cap/builtin/go_cmd.go
+    - Capability.Run() methods that were only reachable via the defunct pipeline parser are deleted
+    - The cap.Capability interface's Run() method is removed OR downgraded to a stub that panics 'unreachable under MCP-first architecture', with a comment explaining that execution goes through engine.runShellCommand via sh -c
+    - Tiers remain as advisory metadata on the Capability interface for doit_list_capabilities display and for the 'disable dangerous tier entirely' config switch (cfg.Tiers.Dangerous)
+    - Tiers are NOT consulted during per-command policy evaluation — engine.evaluatePolicy does not call c.Tier() to gate allow/deny decisions
+    - doit_list_capabilities output still shows tier classifications for each capability
+    - 'The ''disable dangerous tier'' config gate still works: when cfg.Tiers.Dangerous is false, capabilities marked dangerous do not appear in doit_list_capabilities and any L1 rule that references them reports ''tier disabled in config'''
+    - 'All tests still pass after the deletion: go vet ./..., go test ./..., go build ./...'
     context: |-
-      Verified on v0.5.0 by dry_run in the 2026-04-12 session:
-        - `git push` (bare, no --force) → allow L1 "all segments are read-only", Tiers: [read]
-        - `go install ./cmd/doit` → L3 allows as build tier (wrong — should be dangerous; L3 only happened to agree because it's in-scope for the session)
+      The pre-T17 framing of this target ("add EffectiveTier(args []string) so git push becomes dangerous at eval time") assumed tiers drove policy decisions. Under the T17 architectural shift (engine treats commands as opaque strings, tiers are not consulted per-command), the EffectiveTier idea is obsolete — you don't need per-subcommand tiers in the engine path if the engine isn't using tiers at all.
 
-      Root cause unchanged from the original context: `gitSubcommandTier()` in `internal/cap/builtin/git.go` and `goSubcommandTier()` in `internal/cap/builtin/go_cmd.go` correctly classify per-subcommand tiers (commit→write, push→dangerous, install/run/generate→dangerous, build/test/vet→build), but they are **dead code** under the MCP-first architecture. Execution goes through `engine.runShellCommand()` via `sh -c`, not through `Capability.Run()`, so the per-subcommand tier is never consulted. The policy path in `engine.evaluatePolicy` (engine.go, around the `capName := args[0]; tier := c.Tier()` section) uses the capability's BASE tier — TierRead for git, TierBuild for go — which is wrong for non-read git subcommands and for the destructive go subcommands.
+      What's left is the dead-code cleanup:
 
-      Fix: add `EffectiveTier(args []string) cap.Tier` to the `cap.Capability` interface, with a default that just returns `Tier()`. Override on `Git` and `GoCmd` to delegate to the existing helpers. Wire `evaluatePolicy` to call `EffectiveTier(args[1:])` when constructing `policy.Segment`. The dead code in `Git.Run()` / `GoCmd.Run()` (which is unreachable) can be deleted as part of the same change since its logic lives in the helper functions already.
+        - `gitSubcommandTier()` in `internal/cap/builtin/git.go:41-56` — maps commit→write, push→dangerous, unknown→dangerous. Only called from `Git.Run()`, which is never invoked because execution goes through `engine.runShellCommand()` via `sh -c`. Delete.
+        - `goSubcommandTier()` in `internal/cap/builtin/go_cmd.go:39-49` — same story for go install/run/generate → dangerous, build/test/vet → build. Delete.
+        - `Capability.Run()` implementations that were only reached via the pipeline parser — delete them or downgrade to a stub with a panic("unreachable under MCP-first architecture") so any future regression to a parser-based path surfaces immediately.
 
-      Note: git push --force is still caught by the config rule `deny-git-push-flags` in level1.go even without this fix, because that rule matches on flag presence regardless of the computed tier. T20 is about the bare subcommand (git push, git commit, go install) where no flag rule helps.
+      Tiers themselves stay as metadata for:
+        - `doit_list_capabilities` display (users and agents want to see what's classified as read/write/dangerous)
+        - The `cfg.Tiers.Dangerous` coarse config gate ("disable dangerous tier entirely") which operates at the capability-level, not per-command
+        - Future L1 Starlark rules that want to reference tier as a label in their own reasoning
 
-      Tags: security, capabilities, critical, bypass
+      This target can only land AFTER 🎯T17 is merged, because T17's deletion of `policy.Segment.Tier` is the upstream change. Sequence: T17 → T20.
+
+      Tags: cleanup, architecture
+    depends_on:
+    - T17
     tags:
     - security
     - capabilities
@@ -259,7 +293,7 @@ targets:
     discovered: 2026-04-11
   T21:
     name: Executed commands log parsed segments and tiers to the audit log
-    status: identified
+    status: achieved
     value: 5.0
     cost: 2.0
     acceptance:
@@ -272,6 +306,7 @@ targets:
     - observability
     origin: discovered during doit experimentation session 2026-04-11
     discovered: 2026-04-11
+    achieved: 2026-04-12
   T22:
     name: Sessions can be started with L1/L2-only configurations
     status: identified
@@ -289,7 +324,7 @@ targets:
     discovered: 2026-04-11
   T23:
     name: Unknown capabilities are rejected or escalated, not silently defaulted to TierRead
-    status: identified
+    status: achieved
     value: 13.0
     cost: 2.0
     observable: true
@@ -318,9 +353,10 @@ targets:
     - error-messages
     origin: discovered during doit experimentation session 2026-04-11
     discovered: 2026-04-11
+    achieved: 2026-04-12
   T24:
     name: Capability Validate() rejects shell metacharacters in arguments
-    status: identified
+    status: achieved
     value: 8.0
     cost: 3.0
     acceptance:
@@ -340,6 +376,7 @@ targets:
     - defense-in-depth
     origin: discovered during doit experimentation session 2026-04-11
     discovered: 2026-04-11
+    achieved: 2026-04-12
   T25:
     name: deny-rm-catastrophic covers system directories and glob paths
     status: identified
@@ -361,7 +398,9 @@ targets:
         - absolute system paths: `/usr`, `/etc`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/System`, `/Library`, `/Users`, `/home`, `/var`, `/opt`, `/boot`, `/dev`, `/proc`, `/sys`
         - other-user home dirs: `~root`, `~someone` (any `~` followed by a non-`/` character)
 
-      Maintain the denylist as a package-level constant so it's easy to review and extend. Existing positive tests for `/`, `.`, `..`, `~`, `~/...` must continue to pass.
+      Maintain the blacklist as a package-level constant so it's easy to review and extend. Existing positive tests for `/`, `.`, `..`, `~`, `~/...` must continue to pass.
+
+      Independent of 🎯T17 — this target is a specific L1 pattern rule, which is exactly the shape of L1 under the new architecture. It can land in parallel with T17 since they touch different rules in `internal/policy/level1.go` (T17 deletes `checkSafePipeline`, T25 extends `checkRmCatastrophic`). Minor merge-conflict risk on the level1.go rule registration list; resolvable mechanically.
 
       Value downgraded from 5 to 3 because L3 already catches the worst cases, but not retired — defense in depth matters and L3 coverage is not contractual.
     tags:
