@@ -4,9 +4,7 @@
 package builtin
 
 import (
-	"context"
 	"fmt"
-	"io"
 
 	"github.com/marcelocantos/doit/internal/cap"
 )
@@ -26,6 +24,3 @@ func (r *Rm) Validate(args []string) error {
 	return nil
 }
 
-func (r *Rm) Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	return runExternal(ctx, "rm", args, stdin, stdout, stderr)
-}

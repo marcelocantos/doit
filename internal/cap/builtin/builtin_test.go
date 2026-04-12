@@ -38,49 +38,6 @@ func TestRegisterAll(t *testing.T) {
 	}
 }
 
-func TestGitSubcommandTier(t *testing.T) {
-	tests := []struct {
-		subcmd string
-		want   cap.Tier
-	}{
-		// Read subcommands.
-		{"status", cap.TierRead},
-		{"log", cap.TierRead},
-		{"diff", cap.TierRead},
-		{"blame", cap.TierRead},
-		{"show", cap.TierRead},
-		{"branch", cap.TierRead},
-		{"ls-files", cap.TierRead},
-
-		// Write subcommands.
-		{"add", cap.TierWrite},
-		{"commit", cap.TierWrite},
-		{"merge", cap.TierWrite},
-		{"checkout", cap.TierWrite},
-		{"rebase", cap.TierWrite},
-		{"fetch", cap.TierWrite},
-		{"pull", cap.TierWrite},
-
-		// Dangerous subcommands.
-		{"push", cap.TierDangerous},
-		{"reset", cap.TierDangerous},
-		{"filter-branch", cap.TierDangerous},
-		{"clean", cap.TierDangerous},
-
-		// Unknown defaults to dangerous.
-		{"unknown-subcmd", cap.TierDangerous},
-		{"bisect", cap.TierDangerous},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.subcmd, func(t *testing.T) {
-			got := gitSubcommandTier(tt.subcmd)
-			if got != tt.want {
-				t.Errorf("gitSubcommandTier(%q) = %v, want %v", tt.subcmd, got, tt.want)
-			}
-		})
-	}
-}
 
 func TestExitError(t *testing.T) {
 	e := &ExitError{Code: 42}

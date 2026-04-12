@@ -4,9 +4,7 @@
 package builtin
 
 import (
-	"context"
 	"fmt"
-	"io"
 
 	"github.com/marcelocantos/doit/internal/cap"
 )
@@ -26,6 +24,3 @@ func (c *Chmod) Validate(args []string) error {
 	return nil
 }
 
-func (c *Chmod) Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	return runExternal(ctx, "chmod", args, stdin, stdout, stderr)
-}

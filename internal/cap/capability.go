@@ -6,7 +6,6 @@ package cap
 import (
 	"context"
 	"fmt"
-	"io"
 	"sort"
 	"sync"
 
@@ -66,12 +65,8 @@ type Capability interface {
 	Tier() Tier
 
 	// Validate checks args before execution. Returns a descriptive error
-	// if args are invalid. Called before Run.
+	// if args are invalid.
 	Validate(args []string) error
-
-	// Run executes the capability. It reads from stdin and writes to
-	// stdout, streaming data through. The context carries cancellation.
-	Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error
 }
 
 // Registry maps capability names to implementations and controls tier access.
