@@ -8,15 +8,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/marcelocantos/doit/internal/cap"
 	"github.com/marcelocantos/doit/internal/rules"
 	doitstar "github.com/marcelocantos/doit/internal/starlark"
 )
 
 // Level1 evaluates commands against deterministic rules.
 type Level1 struct {
-	rules     []Rule
-	starlark  *doitstar.Evaluator
+	rules    []Rule
+	starlark *doitstar.Evaluator
 }
 
 // Rule is a named, testable deterministic rule.
@@ -33,8 +32,7 @@ func NewLevel1(cfgRules map[string]rules.CapRuleConfig) *Level1 {
 }
 
 // NewLevel1WithStarlark creates a Level1 engine with built-in, config-derived,
-// and Starlark rules. Starlark rules are evaluated after built-in rules but
-// before the auto-allow safe-pipeline rule.
+// and Starlark rules. Starlark rules are evaluated after built-in rules.
 func NewLevel1WithStarlark(cfgRules map[string]rules.CapRuleConfig, starlarkEval *doitstar.Evaluator) *Level1 {
 	l := &Level1{starlark: starlarkEval}
 
@@ -58,13 +56,6 @@ func NewLevel1WithStarlark(cfgRules map[string]rules.CapRuleConfig, starlarkEval
 		Check:       checkGitCheckoutAll,
 	})
 
-	// Auto-allow rules.
-	l.rules = append(l.rules, Rule{
-		ID:          "allow-safe-pipeline",
-		Description: "Auto-allow pipelines where every segment is read-only",
-		Check:       checkSafePipeline,
-	})
-
 	return l
 }
 
@@ -81,10 +72,13 @@ func (l *Level1) Evaluate(req *Request) *Result {
 		}
 	}
 
-	// Evaluate Starlark rules.
+	// Evaluate Starlark rules against the raw command string.
 	if l.starlark != nil {
-		for _, seg := range req.Segments {
-			starResult, ruleID, starBypassable := l.starlark.EvaluateCommand(seg.CapName, seg.Args, req.Retry)
+		parts := strings.Fields(req.Command)
+		if len(parts) > 0 {
+			capName := parts[0]
+			args := parts[1:]
+			starResult, ruleID, starBypassable := l.starlark.EvaluateCommand(capName, args, req.Retry)
 			if starResult != nil {
 				dec := Escalate
 				switch starResult.Decision {
@@ -123,7 +117,7 @@ func (l *Level1) Rules() []Rule {
 //
 // safeCommands is a list of command prefixes (e.g. "go test", "make") that
 // should be auto-allowed. Each entry is matched against the first one or two
-// tokens of the command string.
+// tokens of the raw command string.
 func (l *Level1) AddProjectContextRules(projectType string, safeCommands []string) {
 	if len(safeCommands) == 0 {
 		return
@@ -137,31 +131,37 @@ func (l *Level1) AddProjectContextRules(projectType string, safeCommands []strin
 		if len(parts) == 0 {
 			continue
 		}
-		cap := parts[0]
+		capName := parts[0]
 		sub := ""
 		if len(parts) > 1 {
 			sub = parts[1]
 		}
-		allowed[cmdKey{cap, sub}] = true
+		allowed[cmdKey{capName, sub}] = true
 	}
 
 	rule := Rule{
 		ID:          fmt.Sprintf("allow-project-safe-commands-%s", projectType),
 		Description: fmt.Sprintf("Auto-allow safe commands for %s project", projectType),
 		Check: func(req *Request) *Result {
-			for _, seg := range req.Segments {
-				sub := ""
-				if len(seg.Args) > 0 {
-					sub = seg.Args[0]
+			parts := strings.Fields(req.Command)
+			if len(parts) == 0 {
+				return nil
+			}
+			capName := parts[0]
+			sub := ""
+			if len(parts) > 1 {
+				// Only use second token as subcmd if it's not a flag.
+				if !strings.HasPrefix(parts[1], "-") {
+					sub = parts[1]
 				}
-				// Match cap+sub first, fall back to cap-only.
-				if allowed[cmdKey{seg.CapName, sub}] || allowed[cmdKey{seg.CapName, ""}] {
-					return &Result{
-						Decision: Allow,
-						Level:    1,
-						Reason:   fmt.Sprintf("safe command for %s project", projectType),
-						RuleID:   fmt.Sprintf("allow-project-safe-commands-%s", projectType),
-					}
+			}
+			// Match cap+sub first, fall back to cap-only.
+			if allowed[cmdKey{capName, sub}] || allowed[cmdKey{capName, ""}] {
+				return &Result{
+					Decision: Allow,
+					Level:    1,
+					Reason:   fmt.Sprintf("safe command for %s project", projectType),
+					RuleID:   fmt.Sprintf("allow-project-safe-commands-%s", projectType),
 				}
 			}
 			return nil
@@ -183,48 +183,64 @@ func (l *Level1) StarlarkRuleCount() int {
 
 // --- Built-in rules ---
 
+// checkRmCatastrophic blocks recursive removal of root, home, or current
+// directory. Parses the raw command string — only matches when the command
+// starts with "rm".
 func checkRmCatastrophic(req *Request) *Result {
-	for _, seg := range req.Segments {
-		if seg.CapName != "rm" {
+	parts := strings.Fields(req.Command)
+	if len(parts) == 0 || parts[0] != "rm" {
+		return nil
+	}
+	args := parts[1:]
+	if !HasAnyFlag(args, "-r", "-R") {
+		return nil
+	}
+	for _, arg := range args {
+		if arg == "" || arg[0] == '-' {
 			continue
 		}
-		if !HasAnyFlag(seg.Args, "-r", "-R") {
-			continue
+		cleaned := filepath.Clean(arg)
+		if cleaned == "/" || cleaned == "." || cleaned == ".." {
+			return &Result{
+				Decision: Deny,
+				Level:    1,
+				Reason:   fmt.Sprintf("refusing to recursively remove %q (permanently blocked)", arg),
+				RuleID:   "deny-rm-catastrophic",
+			}
 		}
-		for _, arg := range seg.Args {
-			if arg == "" || arg[0] == '-' {
-				continue
-			}
-			cleaned := filepath.Clean(arg)
-			if cleaned == "/" || cleaned == "." || cleaned == ".." {
-				return &Result{
-					Decision: Deny,
-					Level:    1,
-					Reason:   fmt.Sprintf("refusing to recursively remove %q (permanently blocked)", arg),
-					RuleID:   "deny-rm-catastrophic",
-				}
-			}
-			if arg == "~" || strings.HasPrefix(arg, "~/") {
-				return &Result{
-					Decision: Deny,
-					Level:    1,
-					Reason:   fmt.Sprintf("refusing to recursively remove %q (permanently blocked)", arg),
-					RuleID:   "deny-rm-catastrophic",
-				}
+		if arg == "~" || strings.HasPrefix(arg, "~/") {
+			return &Result{
+				Decision: Deny,
+				Level:    1,
+				Reason:   fmt.Sprintf("refusing to recursively remove %q (permanently blocked)", arg),
+				RuleID:   "deny-rm-catastrophic",
 			}
 		}
 	}
 	return nil
 }
 
+// checkGitCheckoutAll blocks "git checkout ." which discards all local changes.
+// Parses the raw command string.
 func checkGitCheckoutAll(req *Request) *Result {
-	for _, seg := range req.Segments {
-		if seg.CapName != "git" || len(seg.Args) == 0 || seg.Args[0] != "checkout" {
-			continue
+	parts := strings.Fields(req.Command)
+	if len(parts) < 3 || parts[0] != "git" || parts[1] != "checkout" {
+		return nil
+	}
+	args := parts[2:] // everything after "git checkout"
+	for i, arg := range args {
+		cleaned := filepath.Clean(arg)
+		if cleaned == "." {
+			return &Result{
+				Decision: Deny,
+				Level:    1,
+				Reason:   "checkout: refusing to discard all changes (config rule, bypassable)",
+				RuleID:   "deny-git-checkout-all",
+			}
 		}
-		for i, arg := range seg.Args[1:] {
-			cleaned := filepath.Clean(arg)
-			if cleaned == "." {
+		if arg == "--" && i+1 < len(args) {
+			next := filepath.Clean(args[i+1])
+			if next == "." {
 				return &Result{
 					Decision: Deny,
 					Level:    1,
@@ -232,37 +248,9 @@ func checkGitCheckoutAll(req *Request) *Result {
 					RuleID:   "deny-git-checkout-all",
 				}
 			}
-			if arg == "--" && i+1 < len(seg.Args[1:]) {
-				next := filepath.Clean(seg.Args[i+2])
-				if next == "." {
-					return &Result{
-						Decision: Deny,
-						Level:    1,
-						Reason:   "checkout: refusing to discard all changes (config rule, bypassable)",
-						RuleID:   "deny-git-checkout-all",
-					}
-				}
-			}
 		}
 	}
 	return nil
-}
-
-func checkSafePipeline(req *Request) *Result {
-	if len(req.Segments) == 0 {
-		return nil
-	}
-	for _, seg := range req.Segments {
-		if seg.Tier != cap.TierRead {
-			return nil
-		}
-	}
-	return &Result{
-		Decision: Allow,
-		Level:    1,
-		Reason:   "all segments are read-only",
-		RuleID:   "allow-safe-pipeline",
-	}
 }
 
 // --- Config rule compilation ---
@@ -278,17 +266,17 @@ func compileConfigRules(capName string, cfg rules.CapRuleConfig) []Rule {
 			Description: fmt.Sprintf("Reject flags %v for %s", flags, name),
 			Bypassable:  true,
 			Check: func(req *Request) *Result {
-				for _, seg := range req.Segments {
-					if seg.CapName != name {
-						continue
-					}
-					if HasAnyFlag(seg.Args, flags...) {
-						return &Result{
-							Decision: Deny,
-							Level:    1,
-							Reason:   fmt.Sprintf("rejected flag for %s (config rule, bypassable)", name),
-							RuleID:   fmt.Sprintf("deny-%s-flags", name),
-						}
+				parts := strings.Fields(req.Command)
+				if len(parts) == 0 || parts[0] != name {
+					return nil
+				}
+				args := parts[1:]
+				if HasAnyFlag(args, flags...) {
+					return &Result{
+						Decision: Deny,
+						Level:    1,
+						Reason:   fmt.Sprintf("rejected flag for %s (config rule, bypassable)", name),
+						RuleID:   fmt.Sprintf("deny-%s-flags", name),
 					}
 				}
 				return nil
@@ -306,17 +294,17 @@ func compileConfigRules(capName string, cfg rules.CapRuleConfig) []Rule {
 				Description: fmt.Sprintf("Reject flags %v for %s %s", flags, name, sub),
 				Bypassable:  true,
 				Check: func(req *Request) *Result {
-					for _, seg := range req.Segments {
-						if seg.CapName != name || len(seg.Args) == 0 || seg.Args[0] != sub {
-							continue
-						}
-						if HasAnyFlag(seg.Args[1:], flags...) {
-							return &Result{
-								Decision: Deny,
-								Level:    1,
-								Reason:   fmt.Sprintf("%s: rejected flag for %s (config rule, bypassable)", sub, name),
-								RuleID:   fmt.Sprintf("deny-%s-%s-flags", name, sub),
-							}
+					parts := strings.Fields(req.Command)
+					if len(parts) < 2 || parts[0] != name || parts[1] != sub {
+						return nil
+					}
+					args := parts[2:]
+					if HasAnyFlag(args, flags...) {
+						return &Result{
+							Decision: Deny,
+							Level:    1,
+							Reason:   fmt.Sprintf("%s: rejected flag for %s (config rule, bypassable)", sub, name),
+							RuleID:   fmt.Sprintf("deny-%s-%s-flags", name, sub),
 						}
 					}
 					return nil

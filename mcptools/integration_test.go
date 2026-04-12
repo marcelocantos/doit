@@ -80,8 +80,15 @@ func TestIntegration_DryRun_ReadOnly(t *testing.T) {
 		t.Error("expected non-error for read-only dry run")
 	}
 	text := extractText(t, result)
-	if !strings.Contains(text, "allow") {
-		t.Errorf("expected 'allow' in dry run result, got:\n%s", text)
+	// Read-only commands are treated as opaque strings — they escalate to
+	// L2/L3 rather than being auto-allowed at L1. In the integration test
+	// environment L3 is disabled, so the result is "escalate", not "allow".
+	// The command must NOT be denied.
+	if strings.Contains(text, "deny") {
+		t.Errorf("read-only dry run should not be denied, got:\n%s", text)
+	}
+	if !strings.Contains(text, "escalate") && !strings.Contains(text, "allow") {
+		t.Errorf("expected 'escalate' or 'allow' in dry run result, got:\n%s", text)
 	}
 }
 
@@ -268,8 +275,14 @@ func TestIntegration_Execute_WithJustification(t *testing.T) {
 		t.Error("expected non-error for read-only with justification")
 	}
 	text := extractText(t, result)
-	if !strings.Contains(text, "allow") {
-		t.Errorf("expected 'allow', got:\n%s", text)
+	// Read-only commands with justification escalate to L2/L3 rather than
+	// being auto-allowed at L1. In the integration test environment L3 is
+	// disabled, so the result is "escalate". The command must NOT be denied.
+	if strings.Contains(text, "deny") {
+		t.Errorf("read-only command with justification should not be denied, got:\n%s", text)
+	}
+	if !strings.Contains(text, "escalate") && !strings.Contains(text, "allow") {
+		t.Errorf("expected 'escalate' or 'allow', got:\n%s", text)
 	}
 }
 

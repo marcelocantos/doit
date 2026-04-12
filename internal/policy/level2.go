@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-
-	"github.com/marcelocantos/doit/internal/cap"
 )
 
 // Level2 evaluates commands against the learned policy store.
@@ -26,19 +24,19 @@ func (l *Level2) EntryCount() int {
 	return len(l.entries)
 }
 
-// Evaluate runs per-segment matching against the learned policy store.
+// Evaluate runs matching against the learned policy store.
 //
 // When req.Retry is true, Level 2 is bypassed entirely (returns Escalate).
 // Learned policies are not hardcoded safety rules.
 //
-// Per-segment matching: for each segment, walk the ordered entry list.
-// First matching approved entry wins. If no entry matches but the segment
-// is TierRead, it's implicitly safe.
+// The engine treats req.Command as an opaque string. L2 matches by parsing
+// the first one or two tokens of the raw command string against the stored
+// cap/subcmd criteria in each PolicyEntry. The shell handles all composition;
+// L2 only reasons about what the first token looks like.
 //
-// Pipeline-level decision:
-//   - Any segment → Deny: whole pipeline is Deny (short-circuit)
-//   - All segments → Allow: pipeline is Allow
-//   - Any segment unmatched or Escalate: pipeline is Escalate
+// Because the command may contain shell operators (&&, |, ;, subshells), L2
+// does not auto-allow commands whose first token looks read-only — any command
+// that is not matched by a specific approved entry escalates to L3.
 func (l *Level2) Evaluate(req *Request) *Result {
 	if req.Retry {
 		return &Result{
@@ -48,47 +46,43 @@ func (l *Level2) Evaluate(req *Request) *Result {
 		}
 	}
 
-	if len(req.Segments) == 0 {
+	if req.Command == "" {
 		return &Result{
 			Decision: Escalate,
 			Level:    2,
-			Reason:   "no segments to evaluate",
+			Reason:   "empty command",
 		}
 	}
 
-	results := make([]*Result, len(req.Segments))
-	for i, seg := range req.Segments {
-		results[i] = l.matchSegment(&seg)
-		if results[i].Decision == Deny {
-			return results[i]
-		}
-	}
+	// Parse the first two tokens of the raw command string to build a
+	// lightweight segment for matching against stored criteria. This is
+	// intentionally shallow — we only look at the leading cap+args, not
+	// the full command, because the full command may contain shell
+	// composition that L2 is not equipped to reason about.
+	seg := parseFirstSegment(req.Command)
 
-	// Single segment: return its result directly (preserves RuleID).
-	if len(results) == 1 {
-		return results[0]
-	}
+	return l.matchSegment(&seg)
+}
 
-	// Multi-segment: all must be Allow.
-	for _, r := range results {
-		if r.Decision != Allow {
-			return &Result{
-				Decision: Escalate,
-				Level:    2,
-				Reason:   "no learned policy matched all segments",
-			}
-		}
+// parseFirstSegment builds a Segment from the leading tokens of the raw
+// command string. It does not interpret shell operators; callers rely on
+// the segment for stored-criteria matching only.
+func parseFirstSegment(command string) Segment {
+	parts := strings.Fields(command)
+	if len(parts) == 0 {
+		return Segment{}
 	}
-	return &Result{
-		Decision: Allow,
-		Level:    2,
-		Reason:   "all segments allowed by learned policy",
+	return Segment{
+		CapName: parts[0],
+		Args:    parts[1:],
 	}
 }
 
 // matchSegment finds the first matching approved entry for a segment.
-// Returns Allow/Deny/Escalate per the matched entry, or implicit Allow
-// for TierRead segments, or Escalate if nothing matches.
+// Returns Allow/Deny/Escalate per the matched entry, or Escalate if nothing
+// matches. Unlike the pre-🎯T17 code, there is no implicit TierRead allow —
+// all commands that lack a specific learned-policy match escalate to L3 so
+// that shell composition is evaluated by the LLM gatekeeper.
 func (l *Level2) matchSegment(seg *Segment) *Result {
 	for _, entry := range l.entries {
 		if !entry.Approved {
@@ -105,16 +99,6 @@ func (l *Level2) matchSegment(seg *Segment) *Result {
 				Reason:   fmt.Sprintf("matched learned policy %q: %s", entry.ID, entry.Reasoning),
 				RuleID:   entry.ID,
 			}
-		}
-	}
-
-	// Implicit TierRead allow: read-only segments are safe even without
-	// an explicit entry, extending Level 1's compositionality.
-	if seg.Tier == cap.TierRead {
-		return &Result{
-			Decision: Allow,
-			Level:    2,
-			Reason:   fmt.Sprintf("%s is read-only (implicit allow)", seg.CapName),
 		}
 	}
 
@@ -208,4 +192,12 @@ func matchAnyGlob(s string, patterns []string) bool {
 		}
 	}
 	return false
+}
+
+// Segment is used internally by L2 for matching against stored criteria.
+// It is not part of the public policy.Request — the engine treats the
+// full command as opaque and never exposes a parsed segment externally.
+type Segment struct {
+	CapName string
+	Args    []string
 }

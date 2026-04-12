@@ -6,7 +6,6 @@ package policy
 import (
 	"testing"
 
-	"github.com/marcelocantos/doit/internal/cap"
 	"github.com/marcelocantos/doit/internal/rules"
 )
 
@@ -28,82 +27,26 @@ func TestDenyRmCatastrophic(t *testing.T) {
 	l1 := defaultLevel1()
 	tests := []struct {
 		name     string
-		segments []Segment
+		command  string
 		wantDeny bool
 	}{
-		{
-			"rm -rf /",
-			[]Segment{{CapName: "rm", Args: []string{"-rf", "/"}, Tier: cap.TierDangerous}},
-			true,
-		},
-		{
-			"rm -rf .",
-			[]Segment{{CapName: "rm", Args: []string{"-rf", "."}, Tier: cap.TierDangerous}},
-			true,
-		},
-		{
-			"rm -rf ..",
-			[]Segment{{CapName: "rm", Args: []string{"-rf", ".."}, Tier: cap.TierDangerous}},
-			true,
-		},
-		{
-			"rm -rf ~",
-			[]Segment{{CapName: "rm", Args: []string{"-rf", "~"}, Tier: cap.TierDangerous}},
-			true,
-		},
-		{
-			"rm -rf ~/",
-			[]Segment{{CapName: "rm", Args: []string{"-rf", "~/"}, Tier: cap.TierDangerous}},
-			true,
-		},
-		{
-			"rm -r /",
-			[]Segment{{CapName: "rm", Args: []string{"-r", "/"}, Tier: cap.TierDangerous}},
-			true,
-		},
-		{
-			"rm -R /",
-			[]Segment{{CapName: "rm", Args: []string{"-R", "/"}, Tier: cap.TierDangerous}},
-			true,
-		},
-		{
-			"rm -rf /tmp/safe",
-			[]Segment{{CapName: "rm", Args: []string{"-rf", "/tmp/safe"}, Tier: cap.TierDangerous}},
-			false,
-		},
-		{
-			"rm file.txt (no recursive flag)",
-			[]Segment{{CapName: "rm", Args: []string{"file.txt"}, Tier: cap.TierDangerous}},
-			false,
-		},
-		{
-			"grep -rf / (not rm)",
-			[]Segment{{CapName: "grep", Args: []string{"-rf", "/"}, Tier: cap.TierRead}},
-			false,
-		},
-		{
-			"rm -fr /",
-			[]Segment{{CapName: "rm", Args: []string{"-fr", "/"}, Tier: cap.TierDangerous}},
-			true,
-		},
-		{
-			"rm -rf //",
-			[]Segment{{CapName: "rm", Args: []string{"-rf", "//"}, Tier: cap.TierDangerous}},
-			true,
-		},
-		{
-			"rm -rf in pipeline",
-			[]Segment{
-				{CapName: "grep", Args: []string{"foo"}, Tier: cap.TierRead},
-				{CapName: "rm", Args: []string{"-rf", "/"}, Tier: cap.TierDangerous},
-			},
-			true,
-		},
+		{"rm -rf /", "rm -rf /", true},
+		{"rm -rf .", "rm -rf .", true},
+		{"rm -rf ..", "rm -rf ..", true},
+		{"rm -rf ~", "rm -rf ~", true},
+		{"rm -rf ~/", "rm -rf ~/", true},
+		{"rm -r /", "rm -r /", true},
+		{"rm -R /", "rm -R /", true},
+		{"rm -rf /tmp/safe", "rm -rf /tmp/safe", false},
+		{"rm file.txt (no recursive flag)", "rm file.txt", false},
+		{"grep -rf / (not rm)", "grep -rf /", false},
+		{"rm -fr /", "rm -fr /", true},
+		{"rm -rf //", "rm -rf //", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := l1.Evaluate(&Request{Segments: tt.segments})
+			result := l1.Evaluate(&Request{Command: tt.command})
 			if tt.wantDeny {
 				if result.Decision != Deny || result.RuleID != "deny-rm-catastrophic" {
 					t.Errorf("got decision=%v rule=%q, want deny by deny-rm-catastrophic",
@@ -119,8 +62,8 @@ func TestDenyRmCatastrophic(t *testing.T) {
 func TestDenyRmCatastrophicNotBypassable(t *testing.T) {
 	l1 := defaultLevel1()
 	result := l1.Evaluate(&Request{
-		Segments: []Segment{{CapName: "rm", Args: []string{"-rf", "/"}, Tier: cap.TierDangerous}},
-		Retry:    true,
+		Command: "rm -rf /",
+		Retry:   true,
 	})
 	if result.Decision != Deny {
 		t.Errorf("got decision=%v, want deny (hardcoded rules cannot be bypassed)", result.Decision)
@@ -131,20 +74,18 @@ func TestDenyMakeFlags(t *testing.T) {
 	l1 := defaultLevel1()
 	tests := []struct {
 		name     string
-		args     []string
+		command  string
 		wantDeny bool
 	}{
-		{"make -j4", []string{"-j4"}, true},
-		{"make -j", []string{"-j"}, true},
-		{"make clean", []string{"clean"}, false},
-		{"make (no args)", nil, false},
+		{"make -j4", "make -j4", true},
+		{"make -j", "make -j", true},
+		{"make clean", "make clean", false},
+		{"make (no args)", "make", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := l1.Evaluate(&Request{
-				Segments: []Segment{{CapName: "make", Args: tt.args, Tier: cap.TierBuild}},
-			})
+			result := l1.Evaluate(&Request{Command: tt.command})
 			if tt.wantDeny {
 				if result.Decision != Deny {
 					t.Errorf("got decision=%v, want deny", result.Decision)
@@ -160,21 +101,19 @@ func TestDenyGitPushFlags(t *testing.T) {
 	l1 := defaultLevel1()
 	tests := []struct {
 		name     string
-		args     []string
+		command  string
 		wantDeny bool
 	}{
-		{"git push --force", []string{"push", "--force"}, true},
-		{"git push -f", []string{"push", "-f"}, true},
-		{"git push --force-with-lease", []string{"push", "--force-with-lease"}, true},
-		{"git push", []string{"push"}, false},
-		{"git push origin master", []string{"push", "origin", "master"}, false},
+		{"git push --force", "git push --force", true},
+		{"git push -f", "git push -f", true},
+		{"git push --force-with-lease", "git push --force-with-lease", true},
+		{"git push", "git push", false},
+		{"git push origin master", "git push origin master", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := l1.Evaluate(&Request{
-				Segments: []Segment{{CapName: "git", Args: tt.args, Tier: cap.TierRead}},
-			})
+			result := l1.Evaluate(&Request{Command: tt.command})
 			if tt.wantDeny {
 				if result.Decision != Deny {
 					t.Errorf("got decision=%v, want deny", result.Decision)
@@ -190,20 +129,18 @@ func TestDenyGitResetHard(t *testing.T) {
 	l1 := defaultLevel1()
 	tests := []struct {
 		name     string
-		args     []string
+		command  string
 		wantDeny bool
 	}{
-		{"git reset --hard", []string{"reset", "--hard"}, true},
-		{"git reset --hard HEAD~1", []string{"reset", "--hard", "HEAD~1"}, true},
-		{"git reset", []string{"reset"}, false},
-		{"git reset --soft", []string{"reset", "--soft"}, false},
+		{"git reset --hard", "git reset --hard", true},
+		{"git reset --hard HEAD~1", "git reset --hard HEAD~1", true},
+		{"git reset", "git reset", false},
+		{"git reset --soft", "git reset --soft", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := l1.Evaluate(&Request{
-				Segments: []Segment{{CapName: "git", Args: tt.args, Tier: cap.TierRead}},
-			})
+			result := l1.Evaluate(&Request{Command: tt.command})
 			if tt.wantDeny {
 				if result.Decision != Deny {
 					t.Errorf("got decision=%v, want deny", result.Decision)
@@ -219,22 +156,20 @@ func TestDenyGitCheckoutAll(t *testing.T) {
 	l1 := defaultLevel1()
 	tests := []struct {
 		name     string
-		args     []string
+		command  string
 		wantDeny bool
 	}{
-		{"git checkout .", []string{"checkout", "."}, true},
-		{"git checkout -- .", []string{"checkout", "--", "."}, true},
-		{"git checkout ./", []string{"checkout", "./"}, true},
-		{"git checkout branch", []string{"checkout", "feature"}, false},
-		{"git checkout -- file.go", []string{"checkout", "--", "file.go"}, false},
-		{"git status", []string{"status"}, false},
+		{"git checkout .", "git checkout .", true},
+		{"git checkout -- .", "git checkout -- .", true},
+		{"git checkout ./", "git checkout ./", true},
+		{"git checkout branch", "git checkout feature", false},
+		{"git checkout -- file.go", "git checkout -- file.go", false},
+		{"git status", "git status", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := l1.Evaluate(&Request{
-				Segments: []Segment{{CapName: "git", Args: tt.args, Tier: cap.TierRead}},
-			})
+			result := l1.Evaluate(&Request{Command: tt.command})
 			if tt.wantDeny {
 				if result.Decision != Deny || result.RuleID != "deny-git-checkout-all" {
 					t.Errorf("got decision=%v rule=%q, want deny by deny-git-checkout-all",
@@ -247,90 +182,23 @@ func TestDenyGitCheckoutAll(t *testing.T) {
 	}
 }
 
-func TestAllowSafePipeline(t *testing.T) {
-	l1 := defaultLevel1()
-	tests := []struct {
-		name      string
-		segments  []Segment
-		redirect  bool
-		wantAllow bool
-	}{
-		{
-			"single read-only",
-			[]Segment{{CapName: "grep", Args: []string{"foo", "file"}, Tier: cap.TierRead}},
-			false,
-			true,
-		},
-		{
-			"multi read-only pipeline",
-			[]Segment{
-				{CapName: "grep", Args: []string{"foo"}, Tier: cap.TierRead},
-				{CapName: "sort", Tier: cap.TierRead},
-				{CapName: "head", Tier: cap.TierRead},
-			},
-			false,
-			true,
-		},
-		{
-			"mixed tiers",
-			[]Segment{
-				{CapName: "grep", Args: []string{"foo"}, Tier: cap.TierRead},
-				{CapName: "tee", Args: []string{"out.txt"}, Tier: cap.TierWrite},
-			},
-			false,
-			false,
-		},
-		{
-			"build tier",
-			[]Segment{{CapName: "make", Tier: cap.TierBuild}},
-			false,
-			false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := l1.Evaluate(&Request{
-				Segments:       tt.segments,
-			})
-			if tt.wantAllow {
-				if result.Decision != Allow || result.RuleID != "allow-safe-pipeline" {
-					t.Errorf("got decision=%v rule=%q, want allow by allow-safe-pipeline",
-						result.Decision, result.RuleID)
-				}
-			} else if result.Decision == Allow && result.RuleID == "allow-safe-pipeline" {
-				t.Errorf("unexpected allow by allow-safe-pipeline")
-			}
-		})
-	}
-}
-
 func TestRetryBypassesConfigRules(t *testing.T) {
 	l1 := defaultLevel1()
 
 	tests := []struct {
-		name     string
-		segments []Segment
+		name    string
+		command string
 	}{
-		{
-			"make -j bypassed",
-			[]Segment{{CapName: "make", Args: []string{"-j4"}, Tier: cap.TierBuild}},
-		},
-		{
-			"git push --force bypassed",
-			[]Segment{{CapName: "git", Args: []string{"push", "--force"}, Tier: cap.TierRead}},
-		},
-		{
-			"git checkout . bypassed",
-			[]Segment{{CapName: "git", Args: []string{"checkout", "."}, Tier: cap.TierRead}},
-		},
+		{"make -j bypassed", "make -j4"},
+		{"git push --force bypassed", "git push --force"},
+		{"git checkout . bypassed", "git checkout ."},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := l1.Evaluate(&Request{
-				Segments: tt.segments,
-				Retry:    true,
+				Command: tt.command,
+				Retry:   true,
 			})
 			if result.Decision == Deny {
 				t.Errorf("got deny, want non-deny (config rules should be bypassed with retry): %s", result.Reason)
@@ -341,9 +209,7 @@ func TestRetryBypassesConfigRules(t *testing.T) {
 
 func TestEscalateWhenNoRuleMatches(t *testing.T) {
 	l1 := defaultLevel1()
-	result := l1.Evaluate(&Request{
-		Segments: []Segment{{CapName: "make", Tier: cap.TierBuild}},
-	})
+	result := l1.Evaluate(&Request{Command: "make"})
 	if result.Decision != Escalate {
 		t.Errorf("got decision=%v, want escalate", result.Decision)
 	}
@@ -372,22 +238,23 @@ func TestDecisionString(t *testing.T) {
 func TestJustificationPassthrough(t *testing.T) {
 	l1 := defaultLevel1()
 	result := l1.Evaluate(&Request{
-		Segments:      []Segment{{CapName: "grep", Args: []string{"foo"}, Tier: cap.TierRead}},
+		Command:       "grep foo file",
 		Justification: "need to search for error patterns",
 		SafetyArg:     "read-only grep, no side effects",
 	})
-	if result.Decision != Allow {
-		t.Errorf("got decision=%v, want allow", result.Decision)
+	// grep is not a known-deny command; it escalates (no whitelist in L1).
+	if result.Decision == Deny {
+		t.Errorf("got deny, want non-deny for grep command")
 	}
 	// Justification and SafetyArg are on the Request, not the Result.
 	// They flow through to audit logging via the daemon.
 }
 
-func TestEmptySegments(t *testing.T) {
+func TestEmptyCommand(t *testing.T) {
 	l1 := defaultLevel1()
-	result := l1.Evaluate(&Request{Segments: nil})
+	result := l1.Evaluate(&Request{Command: ""})
 	if result.Decision != Escalate {
-		t.Errorf("got decision=%v, want escalate for empty segments", result.Decision)
+		t.Errorf("got decision=%v, want escalate for empty command", result.Decision)
 	}
 }
 

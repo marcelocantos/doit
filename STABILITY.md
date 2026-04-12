@@ -5,7 +5,7 @@ breaking changes to the public API, MCP interface, configuration format,
 audit log format, or Starlark rule contract will require a major version
 bump. The pre-1.0 period exists to get these right.
 
-Snapshot as of v0.5.0.
+Snapshot as of v0.5.0 (policy.Request.Segments removed in 🎯T17, post-v0.5.0).
 
 ## Interaction surface catalogue
 
@@ -64,6 +64,7 @@ Snapshot as of v0.5.0.
 | `Engine.ExecuteStreaming(ctx, req, stdout, stderr)` | `Result` | Stable |
 | `Engine.PolicyStatus()` | `map[string]any` | Stable |
 | `Request` struct | Command, Args, Justification, SafetyArg, Cwd, Env, Approved, Retry | Stable |
+| `policy.Request` struct | Command, Cwd, Retry, Justification, SafetyArg, ProjectType | Stable — `Segments` field removed post-v0.5.0 (🎯T17) |
 | `Result` struct | ExitCode, Stdout, Stderr, PolicyLevel, PolicyDecision, PolicyReason, PolicyRuleID, EscalateToken | Stable |
 | `EvalResult` struct | Decision, Level, Reason, RuleID, Bypassable | Stable |
 | `Engine.ListCapabilities()` | `[]CapabilityInfo` | Stable |
@@ -177,6 +178,11 @@ The `segments`/`tiers` fields contain a single-element array derived from
 the first token of the command, for coarse filtering during audit queries
 (`Filter.Cap`). They are not a semantic decomposition of the command and
 do not reflect what the shell actually runs.
+
+These fields are deprecated as of 🎯T17 (post-v0.5.0). New writes populate
+them for backwards compatibility with log readers that use `Filter.Cap`, but
+they carry no policy semantics — the engine treats the full command string as
+opaque. A future major release will remove them.
 
 Genesis hash: SHA-256 of `"doit-genesis"`.
 

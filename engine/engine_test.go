@@ -49,11 +49,20 @@ func TestNew_ExplicitConfig(t *testing.T) {
 func TestEvaluate_ReadOnly(t *testing.T) {
 	eng := newTestEngine(t)
 
+	// Read-only commands are treated as opaque strings by the engine.
+	// There is no auto-allow whitelist for read-tier capabilities — they
+	// escalate to L2/L3 so that shell composition in the command string
+	// (pipes, subshells, redirects) is evaluated by the LLM gatekeeper.
 	result := eng.Evaluate(context.Background(), Request{
 		Command: "cat foo.txt",
 	})
-	if result.Decision != "allow" {
-		t.Errorf("expected allow for read-only command, got %s: %s", result.Decision, result.Reason)
+	if result.Decision == "deny" {
+		t.Errorf("read-only command should not be denied at L1, got %s: %s", result.Decision, result.Reason)
+	}
+	// Expect escalate (L2/L3 is not configured in testEngine, so escalate is the terminal decision).
+	if result.Decision != "escalate" {
+		t.Errorf("expected escalate for bare read-only command (no L2/L3 in test engine), got %s: %s",
+			result.Decision, result.Reason)
 	}
 }
 
