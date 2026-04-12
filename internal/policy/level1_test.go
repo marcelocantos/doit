@@ -30,6 +30,7 @@ func TestDenyRmCatastrophic(t *testing.T) {
 		command  string
 		wantDeny bool
 	}{
+		// Existing root/home/dot cases.
 		{"rm -rf /", "rm -rf /", true},
 		{"rm -rf .", "rm -rf .", true},
 		{"rm -rf ..", "rm -rf ..", true},
@@ -42,6 +43,25 @@ func TestDenyRmCatastrophic(t *testing.T) {
 		{"grep -rf / (not rm)", "grep -rf /", false},
 		{"rm -fr /", "rm -fr /", true},
 		{"rm -rf //", "rm -rf //", true},
+		// System directories (blacklist).
+		{"rm -rf /usr", "rm -rf /usr", true},
+		{"rm -rf /etc", "rm -rf /etc", true},
+		{"rm -rf /bin", "rm -rf /bin", true},
+		{"rm -rf /Users", "rm -rf /Users", true},
+		{"rm -rf /usr/share (subtree of blacklisted)", "rm -rf /usr/share", true},
+		// Glob paths with recursive delete.
+		{"rm -rf /* (glob)", "rm -rf /*", true},
+		{"rm -rf /usr/* (glob under blacklisted)", "rm -rf /usr/*", true},
+		// Other-user home dirs.
+		{"rm -rf ~root", "rm -rf ~root", true},
+		{"rm -rf ~otheruser", "rm -rf ~otheruser", true},
+		{"rm -rf ~otheruser/Desktop", "rm -rf ~otheruser/Desktop", true},
+		// Non-catastrophic paths — must NOT be caught by this rule.
+		{"rm -rf /usr2 (not a blacklisted path)", "rm -rf /usr2", false},
+		{"rm -rf /etcd (not a blacklisted path)", "rm -rf /etcd", false},
+		{"rm -rf ./foo (relative path)", "rm -rf ./foo", false},
+		{"rm -f somefile.txt (no recursive flag)", "rm -f somefile.txt", false},
+		{"rm -f * (glob without recursive flag)", "rm -f *", false},
 	}
 
 	for _, tt := range tests {
