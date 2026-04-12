@@ -4,8 +4,6 @@
 package builtin
 
 import (
-	"context"
-	"io"
 
 	"github.com/marcelocantos/doit/internal/cap"
 )
@@ -23,6 +21,3 @@ func (g *Grep) Validate(args []string) error {
 	return nil
 }
 
-func (g *Grep) Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	return runExternal(ctx, "grep", args, stdin, stdout, stderr)
-}
