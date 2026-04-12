@@ -8,6 +8,7 @@ cover.out
 *.swo
 .claude/settings.local.json
 internal/cli/help_agent.md
+docs/targets.md
 node_modules/
 __pycache__/
 *.log
