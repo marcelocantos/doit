@@ -69,7 +69,7 @@ maintenance activities. Append-only — newest entries at the bottom.
 
 ## 2026-04-12 — /release v0.5.0
 
-- **Commit**: `pending`
+- **Commit**: `deed084`
 - **Outcome**: Release v0.5.0 (darwin-arm64, linux-amd64, linux-arm64).
   Major internal changes: pipeline parser removed (shell handles all
   composition), L3 rebuilt on one-shot `claude -p` (replacing claudia
