@@ -1083,8 +1083,9 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 	}
 
 	// Extract the first word as the capability name for tier lookup.
-	// The shell handles all composition (&&, |, ;, etc.) — doit evaluates
-	// the command string as-is.
+	// This is used only for audit log coarse-filtering (segments/tiers fields).
+	// The shell handles all composition (&&, |, ;, etc.) — the full command
+	// string is passed to policy layers as an opaque string.
 	capName := args[0]
 	tier := cap.TierRead
 	if c, lookupErr := e.reg.Lookup(capName); lookupErr == nil {
@@ -1093,9 +1094,13 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 	segments = append(segments, capName)
 	tiers = append(tiers, tier.String())
 
+	cmdStr := req.Command
+	if cmdStr == "" {
+		cmdStr = strings.Join(args, " ")
+	}
+
 	policyReq := &policy.Request{
-		Command:       req.Command,
-		Segments:      []policy.Segment{{CapName: capName, Args: args[1:], Tier: tier}},
+		Command:       cmdStr,
 		Cwd:           req.Cwd,
 		Retry:         req.Retry,
 		Justification: req.Justification,

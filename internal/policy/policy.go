@@ -5,8 +5,6 @@ package policy
 
 import (
 	"context"
-
-	"github.com/marcelocantos/doit/internal/cap"
 )
 
 // Decision represents the outcome of policy evaluation.
@@ -41,21 +39,15 @@ type Result struct {
 }
 
 // Request is the structured input to the policy engine.
+// The engine treats Command as an opaque string; shell composition (&&, |, ;,
+// redirects, subshells) is left to the shell and is never parsed by doit.
 type Request struct {
-	Command        string    // original command string
-	Segments       []Segment // parsed capability + args pairs
-	Cwd            string
+	Command       string // raw command string passed to sh -c
+	Cwd           string
 	Retry         bool
 	Justification string // why the worker needs this command
-	SafetyArg      string // why the worker believes it's safe
-	ProjectType    string // project type discovered from context (e.g. "go", "node")
-}
-
-// Segment mirrors pipeline.Segment for policy evaluation.
-type Segment struct {
-	CapName string
-	Args    []string
-	Tier    cap.Tier
+	SafetyArg     string // why the worker believes it's safe
+	ProjectType   string // project type discovered from context (e.g. "go", "node")
 }
 
 // EvalInfo carries policy evaluation metadata through context for audit logging.

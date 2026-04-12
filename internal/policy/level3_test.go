@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-
-	"github.com/marcelocantos/doit/internal/cap"
 )
 
 type mockPrompter struct {
@@ -97,20 +95,16 @@ func TestParseL3Decision(t *testing.T) {
 
 func TestBuildPrompt(t *testing.T) {
 	req := &Request{
-		Command: "git push origin master",
-		Segments: []Segment{
-			{CapName: "git", Args: []string{"push", "origin", "master"}, Tier: cap.TierDangerous},
-		},
-		Cwd:            "/home/user/project",
-		Justification:  "deploy to production",
-		SafetyArg:      "reviewed all commits",
+		Command:       "git push origin master",
+		Cwd:           "/home/user/project",
+		Justification: "deploy to production",
+		SafetyArg:     "reviewed all commits",
 	}
 
 	prompt := buildPrompt(req, false)
 
 	checks := []string{
 		"git push origin master",
-		"git",
 		"/home/user/project",
 		"deploy to production",
 		"reviewed all commits",
@@ -150,8 +144,7 @@ func TestLevel3EvaluateAllow(t *testing.T) {
 	l3 := NewLevel3(mock)
 
 	result := l3.Evaluate(context.Background(), &Request{
-		Command:  "make test",
-		Segments: []Segment{{CapName: "make", Args: []string{"test"}, Tier: cap.TierBuild}},
+		Command: "make test",
 	})
 
 	if result.Decision != Allow {
@@ -170,8 +163,7 @@ func TestLevel3EvaluateDeny(t *testing.T) {
 	l3 := NewLevel3(mock)
 
 	result := l3.Evaluate(context.Background(), &Request{
-		Command:  "rm important.txt",
-		Segments: []Segment{{CapName: "rm", Args: []string{"important.txt"}, Tier: cap.TierDangerous}},
+		Command: "rm important.txt",
 	})
 
 	if result.Decision != Deny {
@@ -187,8 +179,7 @@ func TestLevel3EvaluateEscalate(t *testing.T) {
 	l3 := NewLevel3(mock)
 
 	result := l3.Evaluate(context.Background(), &Request{
-		Command:  "git push --force",
-		Segments: []Segment{{CapName: "git", Args: []string{"push", "--force"}, Tier: cap.TierDangerous}},
+		Command: "git push --force",
 	})
 
 	if result.Decision != Escalate {
@@ -267,8 +258,7 @@ func TestLevel3EvaluateInSession(t *testing.T) {
 	}
 
 	result := l3.EvaluateInSession(context.Background(), &Request{
-		Command:  "make test",
-		Segments: []Segment{{CapName: "make", Args: []string{"test"}, Tier: cap.TierBuild}},
+		Command: "make test",
 	}, session)
 
 	if result.Decision != Allow {

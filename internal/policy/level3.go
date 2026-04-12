@@ -182,16 +182,6 @@ func buildPrompt(req *Request, fast bool) string {
 
 	sb.WriteString("Command details:\n")
 	fmt.Fprintf(&sb, "  Command: %s\n", req.Command)
-	if len(req.Segments) > 0 {
-		sb.WriteString("  Segments:\n")
-		for _, seg := range req.Segments {
-			fmt.Fprintf(&sb, "    - %s (tier: %s)", seg.CapName, seg.Tier.String())
-			if len(seg.Args) > 0 {
-				fmt.Fprintf(&sb, " args: %v", seg.Args)
-			}
-			sb.WriteString("\n")
-		}
-	}
 	if req.Cwd != "" {
 		fmt.Fprintf(&sb, "  Working directory: %s\n", req.Cwd)
 	}
