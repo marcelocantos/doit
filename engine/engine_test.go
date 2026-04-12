@@ -464,13 +464,33 @@ func slicesEqual(a, b []string) bool {
 
 func TestStartSession_NoL3(t *testing.T) {
 	eng := newTestEngine(t)
-	// Test engine has no L3 configured.
-	_, err := eng.StartSession("test scope", "test desc", 0)
-	if err == nil {
-		t.Fatal("expected error when L3 is not available")
+	// Sessions should succeed even without L3 configured.
+	id, err := eng.StartSession("test scope", "test desc", 0)
+	if err != nil {
+		t.Fatalf("StartSession should succeed without L3, got error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "L3") {
-		t.Errorf("error should mention L3, got: %v", err)
+	if id == "" {
+		t.Fatal("expected non-empty session ID")
+	}
+
+	// Session should be active.
+	ws := eng.ActiveSession()
+	if ws == nil {
+		t.Fatal("expected active session after StartSession without L3")
+	}
+	if ws.ID != id {
+		t.Errorf("session ID = %q, want %q", ws.ID, id)
+	}
+	if ws.Scope != "test scope" {
+		t.Errorf("session scope = %q, want %q", ws.Scope, "test scope")
+	}
+
+	// EndSession should work.
+	if !eng.EndSession(id) {
+		t.Fatal("EndSession returned false, expected true")
+	}
+	if ws := eng.ActiveSession(); ws != nil {
+		t.Fatal("expected no active session after EndSession")
 	}
 }
 

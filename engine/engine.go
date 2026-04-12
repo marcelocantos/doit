@@ -313,9 +313,6 @@ func (e *Engine) l3SessionClient() *llm.Client {
 // and exits), so it's been removed. The session prefix still
 // reaches every evaluation via level3.go's buildSessionPrefix.
 func (e *Engine) StartSession(scope, description string, timeout time.Duration) (string, error) {
-	if e.policyL3 == nil {
-		return "", fmt.Errorf("L3 policy engine not available; sessions require L3")
-	}
 	if scope == "" {
 		return "", fmt.Errorf("scope is required")
 	}
