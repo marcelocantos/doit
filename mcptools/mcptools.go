@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package mcptools registers doit's MCP tools on an mcp-go server.
-// External consumers call Register to add doit_execute, doit_dry_run,
-// doit_policy_status, and doit_approve tools to their MCP server.
+// External consumers call Register to add the full suite of doit tools
+// (execute, dry_run, policy management, sessions, audit, repo_read,
+// check_config) to their MCP server.
 package mcptools
 
 import (
@@ -46,7 +47,7 @@ func Register(srv *server.MCPServer, eng *engine.Engine) {
 	srv.AddTool(
 		mcp.NewTool("doit_dry_run",
 			mcp.WithDescription("Evaluate a command against doit's policy engine without executing it. "+
-				"Returns the policy decision, matched segments, and safety tiers."),
+				"Returns the policy decision, level, rule ID, and reason."),
 			mcp.WithString("command", mcp.Required(), mcp.Description("The command to evaluate")),
 			mcp.WithString("justification", mcp.Description("Why the agent needs this command")),
 			mcp.WithString("safety_arg", mcp.Description("Why the agent believes the command is safe")),
@@ -224,13 +225,13 @@ func handleExecute(srv *server.MCPServer, eng *engine.Engine) server.ToolHandler
 				case "allow_always":
 					r.Retry = true
 					result := eng.Execute(ctx, r)
-					_ = eng.RecordDecision(command, evalResult.Segments, "allow")
+					_ = eng.RecordDecision(command, "allow")
 					elicitRulePromotion(ctx, srv, eng, command, "allow")
 					return buildResult(result), nil
 				case "deny":
 					return mcp.NewToolResultError(fmt.Sprintf("Denied by user: %s", command)), nil
 				case "deny_always":
-					_ = eng.RecordDecision(command, evalResult.Segments, "deny")
+					_ = eng.RecordDecision(command, "deny")
 					elicitRulePromotion(ctx, srv, eng, command, "deny")
 					return mcp.NewToolResultError(fmt.Sprintf("Denied by user (permanent): %s", command)), nil
 				}
@@ -404,12 +405,6 @@ func handleDryRun(eng *engine.Engine) server.ToolHandlerFunc {
 		fmt.Fprintf(&b, "Reason: %s\n", result.Reason)
 		if result.RuleID != "" {
 			fmt.Fprintf(&b, "Rule: %s\n", result.RuleID)
-		}
-		if len(result.Segments) > 0 {
-			fmt.Fprintf(&b, "Segments: %v\n", result.Segments)
-		}
-		if len(result.Tiers) > 0 {
-			fmt.Fprintf(&b, "Tiers: %v\n", result.Tiers)
 		}
 
 		return mcp.NewToolResultText(b.String()), nil

@@ -66,13 +66,11 @@ type Result struct {
 
 // EvalResult is returned by Evaluate (dry-run, no execution).
 type EvalResult struct {
-	Decision   string   // "allow", "deny", "escalate"
-	Level      int      // 1, 2, or 3
-	Reason     string   // human-readable explanation
-	RuleID     string   // which rule matched
-	Bypassable bool     // true if the denial can be overridden by the user
-	Segments   []string // capability names
-	Tiers      []string // tier of each segment
+	Decision   string // "allow", "deny", "escalate"
+	Level      int    // 1, 2, or 3
+	Reason     string // human-readable explanation
+	RuleID     string // which rule matched
+	Bypassable bool   // true if the denial can be overridden by the user
 }
 
 // WorkSession represents an active work session where L3 evaluations
@@ -386,18 +384,17 @@ func (e *Engine) ActiveSession() *WorkSession {
 }
 
 // Evaluate runs the policy chain without executing the command.
-// Returns the policy decision, matched segments, and tiers.
+// Returns the policy decision. Segment/tier analysis is a detail of the
+// individual policy layers and is not surfaced at this level.
 func (e *Engine) Evaluate(ctx context.Context, req Request) *EvalResult {
 	args := req.args()
 
-	result, segments, tiers := e.evaluatePolicy(ctx, args, req)
+	result, _, _ := e.evaluatePolicy(ctx, args, req)
 	if result == nil {
 		return &EvalResult{
 			Decision: "escalate",
 			Level:    0,
 			Reason:   "no policy engine configured or parse failed",
-			Segments: segments,
-			Tiers:    tiers,
 		}
 	}
 	return &EvalResult{
@@ -406,14 +403,12 @@ func (e *Engine) Evaluate(ctx context.Context, req Request) *EvalResult {
 		Reason:     result.Reason,
 		RuleID:     result.RuleID,
 		Bypassable: result.Bypassable,
-		Segments:   segments,
-		Tiers:      tiers,
 	}
 }
 
-// Execute evaluates policy and, if allowed, runs the command. The command is
-// executed via sh -c when Args is empty and Command is set, otherwise through
-// the existing pipeline parser.
+// Execute evaluates policy and, if allowed, runs the command via sh -c.
+// Shell composition (pipes, redirects, &&, ||) is handled by the shell;
+// doit passes the command string through unchanged.
 func (e *Engine) Execute(ctx context.Context, req Request) *Result {
 	args := req.args()
 
@@ -705,31 +700,21 @@ func (e *Engine) ProjectContext() *doitctx.ProjectContext {
 }
 
 // RecordDecision adds a learned policy entry (L2) for a specific command
-// pattern and reloads the L2 engine.
-func (e *Engine) RecordDecision(command string, segments []string, decision string) error {
+// pattern and reloads the L2 engine. The cap/subcmd match criteria are
+// derived by tokenising the command string.
+func (e *Engine) RecordDecision(command, decision string) error {
 	if e.storePath == "" {
 		return fmt.Errorf("no policy store configured")
 	}
 
-	// Build a match criteria from the first segment (capability + subcommand).
 	cap := ""
 	subcmd := ""
-	if len(segments) > 0 {
-		parts := strings.SplitN(segments[0], " ", 2)
+	parts := strings.Fields(command)
+	if len(parts) > 0 {
 		cap = parts[0]
-		if len(parts) > 1 {
-			subcmd = strings.Fields(parts[1])[0]
-		}
 	}
-	if cap == "" {
-		// Fall back to parsing command string.
-		parts := strings.Fields(command)
-		if len(parts) > 0 {
-			cap = parts[0]
-		}
-		if len(parts) > 1 {
-			subcmd = parts[1]
-		}
+	if len(parts) > 1 {
+		subcmd = parts[1]
 	}
 
 	now := time.Now().UTC()

@@ -66,3 +66,22 @@ maintenance activities. Append-only — newest entries at the bottom.
 - **Outcome**: Released v0.4.0 (darwin-arm64, linux-amd64, linux-arm64).
   Fixed stale --retry references in error messages, rewrote agents-guide
   and README for MCP-first model. Homebrew formula updated.
+
+## 2026-04-12 — /release v0.5.0
+
+- **Commit**: `pending`
+- **Outcome**: Release v0.5.0 (darwin-arm64, linux-amd64, linux-arm64).
+  Major internal changes: pipeline parser removed (shell handles all
+  composition), L3 rebuilt on one-shot `claude -p` (replacing claudia
+  Session mode), two-tier L3 cascade (sonnet fast → opus deep) with L3
+  enabled by default, work sessions (`doit_session_start/end/status`),
+  L2 policy management tools (`doit_policy_list/delete/review`),
+  self-audit (`doit_self_audit`), project-context repo reads
+  (`doit_repo_read`), and `doit_check_config` for deployment verification.
+  Engine cleanup: `EvalResult` no longer exposes `Segments`/`Tiers`
+  (segment analysis is a detail of individual policy layers);
+  `RecordDecision` signature simplified. Stderr logging suppressed so
+  MCP clients don't flag it as error output. Docs refreshed:
+  STABILITY.md snapshot to v0.5.0 with the full 16-tool surface,
+  CLAUDE.md architecture map updated, README/agents-guide tool tables
+  completed.
