@@ -183,9 +183,32 @@ func (l *Level1) StarlarkRuleCount() int {
 
 // --- Built-in rules ---
 
-// checkRmCatastrophic blocks recursive removal of root, home, or current
-// directory. Parses the raw command string — only matches when the command
-// starts with "rm".
+// catastrophicPaths is a blacklist of absolute system paths that must never be
+// recursively removed. Matching is: the target path equals a blacklisted path
+// exactly, OR has that path as a prefix followed by "/". This covers both the
+// root of the system dir (rm -rf /usr) and anything underneath it
+// (rm -rf /usr/share). /usr2 and /etcd are deliberately NOT caught by this
+// rule because they're not children of /usr or /etc.
+var catastrophicPaths = []string{
+	"/usr", "/etc", "/bin", "/sbin", "/lib", "/lib64",
+	"/System", "/Library", "/Users", "/home",
+	"/var", "/opt", "/boot", "/dev", "/proc", "/sys",
+}
+
+// isCatastrophicPath reports whether path is or is under a blacklisted system path.
+func isCatastrophicPath(path string) bool {
+	for _, p := range catastrophicPaths {
+		if path == p || strings.HasPrefix(path, p+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// checkRmCatastrophic blocks recursive removal of root, home, current
+// directory, blacklisted system paths, globs, and other-user home dirs.
+// Parses the raw command string — only matches when the command starts
+// with "rm" and has -r/-R.
 func checkRmCatastrophic(req *Request) *Result {
 	parts := strings.Fields(req.Command)
 	if len(parts) == 0 || parts[0] != "rm" {
@@ -195,26 +218,45 @@ func checkRmCatastrophic(req *Request) *Result {
 	if !HasAnyFlag(args, "-r", "-R") {
 		return nil
 	}
+	deny := func(arg, reason string) *Result {
+		return &Result{
+			Decision: Deny,
+			Level:    1,
+			Reason:   fmt.Sprintf("refusing to recursively remove %s %q (permanently blocked)", reason, arg),
+			RuleID:   "deny-rm-catastrophic",
+		}
+	}
 	for _, arg := range args {
 		if arg == "" || arg[0] == '-' {
 			continue
 		}
+
+		// Glob with recursive delete: any * in an arg is catastrophic,
+		// because bash expands /* to /bin /etc /usr ... at exec time,
+		// and doit only sees the literal /* at policy time.
+		if strings.Contains(arg, "*") {
+			return deny(arg, "glob")
+		}
+
+		// Other-user home dirs: ~username or ~username/... Matches any ~
+		// followed by a non-/ non-empty character. The current user's
+		// home (~, ~/...) is handled below.
+		if len(arg) > 1 && arg[0] == '~' && arg[1] != '/' {
+			return deny(arg, "other-user home")
+		}
+
 		cleaned := filepath.Clean(arg)
 		if cleaned == "/" || cleaned == "." || cleaned == ".." {
-			return &Result{
-				Decision: Deny,
-				Level:    1,
-				Reason:   fmt.Sprintf("refusing to recursively remove %q (permanently blocked)", arg),
-				RuleID:   "deny-rm-catastrophic",
-			}
+			return deny(arg, "")
 		}
 		if arg == "~" || strings.HasPrefix(arg, "~/") {
-			return &Result{
-				Decision: Deny,
-				Level:    1,
-				Reason:   fmt.Sprintf("refusing to recursively remove %q (permanently blocked)", arg),
-				RuleID:   "deny-rm-catastrophic",
-			}
+			return deny(arg, "")
+		}
+
+		// Blacklisted system paths (after cleaning, so /usr/ matches
+		// /usr and /usr/share matches /usr).
+		if isCatastrophicPath(cleaned) {
+			return deny(arg, "system path")
 		}
 	}
 	return nil
