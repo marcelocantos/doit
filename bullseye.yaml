@@ -384,9 +384,10 @@ targets:
     achieved: 2026-04-12
   T25:
     name: deny-rm-catastrophic covers system directories and glob paths
-    status: identified
+    status: achieved
     value: 3.0
     cost: 2.0
+    observable: true
     acceptance:
     - dry_run of 'rm -rf /usr' denied
     - dry_run of 'rm -rf /etc' denied
@@ -413,6 +414,7 @@ targets:
     - rules
     origin: discovered during doit experimentation session 2026-04-11
     discovered: 2026-04-11
+    achieved: 2026-04-13
   T3:
     name: Starlark L1 rules
     status: achieved
