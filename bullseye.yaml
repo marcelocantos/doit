@@ -252,10 +252,11 @@ targets:
     discovered: 2026-04-09
   T20:
     name: Per-subcommand tier helpers and unreachable Capability.Run() methods are deleted; tiers become advisory metadata only
-    status: identified
+    status: achieved
     value: 8.0
     cost: 2.0
     observable: true
+    actual_cost: 2.0
     acceptance:
     - gitSubcommandTier() is deleted from internal/cap/builtin/git.go
     - goSubcommandTier() is deleted from internal/cap/builtin/go_cmd.go
@@ -291,6 +292,7 @@ targets:
     - critical
     origin: discovered during doit experimentation session 2026-04-11
     discovered: 2026-04-11
+    achieved: 2026-04-12
   T21:
     name: Executed commands log parsed segments and tiers to the audit log
     status: achieved
@@ -309,9 +311,10 @@ targets:
     achieved: 2026-04-12
   T22:
     name: Sessions can be started with L1/L2-only configurations
-    status: identified
+    status: achieved
     value: 3.0
     cost: 2.0
+    actual_cost: 2.0
     acceptance:
     - doit_session_start succeeds when L3 is disabled
     - Sessions group audit-log entries by session ID regardless of L3 status
@@ -322,6 +325,7 @@ targets:
     - ux
     origin: discovered during doit experimentation session 2026-04-11
     discovered: 2026-04-11
+    achieved: 2026-04-12
   T23:
     name: Unknown capabilities are rejected or escalated, not silently defaulted to TierRead
     status: achieved
