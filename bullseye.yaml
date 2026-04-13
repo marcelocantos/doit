@@ -132,7 +132,7 @@ targets:
     achieved: 2026-04-11
   T17:
     name: Engine treats commands as opaque strings; commands that match no specific L1 rule escalate to L2/L3
-    status: identified
+    status: achieved
     value: 20.0
     cost: 5.0
     observable: true
@@ -195,6 +195,7 @@ targets:
     - critical
     origin: discovered during doit experimentation session 2026-04-11
     discovered: 2026-04-11
+    achieved: 2026-04-13
   T18:
     name: Output redirection (&gt;, &gt;&gt;, &amp;&gt;) is recognized as a write operation
     status: achieved
