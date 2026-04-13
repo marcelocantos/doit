@@ -415,6 +415,20 @@ targets:
     origin: discovered during doit experimentation session 2026-04-11
     discovered: 2026-04-11
     achieved: 2026-04-13
+  T26:
+    name: Commands carry time expectations that inform static analysis and runtime management
+    status: identified
+    value: 5.0
+    cost: 8.0
+    acceptance:
+    - MCP execute request schema accepts an optional time_expectation field (timeout_seconds and/or expected_duration_seconds)
+    - L1 rules can access the time expectation and flag mismatches against known command profiles
+    - Runtime execution enforces timeout_seconds if provided, killing the process on expiry
+    - Audit log records expected vs actual duration for completed commands
+    - L2 learns typical durations per command pattern and can flag anomalies
+    context: 'Agents submitting commands to doit rarely know how long they''ll take, and doit has no way to reason about it. A time expectation (timeout, estimated duration, or both) attached to each request would enable two things: (1) static analysis — L1/L2 rules could flag suspicious mismatches (e.g., `sleep 3600` with a 10s expectation, or `make` with a 1s expectation), and (2) runtime management — doit could kill runaway processes, warn on unexpected delays, and collect timing data to improve L2 learned patterns. The expectation could come from the agent (MCP request field), from L2 learned history, or from project config.'
+    origin: user idea, session 2026-04-13
+    discovered: 2026-04-13
   T3:
     name: Starlark L1 rules
     status: achieved
