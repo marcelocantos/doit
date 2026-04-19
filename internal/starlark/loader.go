@@ -20,16 +20,30 @@ type Rule struct {
 	Description string
 	Bypassable  bool
 	CheckFn     *starlark.Function
-	Thread      *starlark.Thread
-	Globals     starlark.StringDict
-	Tests       []TestCase
+	// WantsMeta is true when CheckFn declares a third parameter — the
+	// rule opts in to receive a metadata dict (timeout_seconds,
+	// expected_duration_seconds, justification, safety_arg).
+	WantsMeta bool
+	Thread    *starlark.Thread
+	Globals   starlark.StringDict
+	Tests     []TestCase
 }
 
 // TestCase is a test case embedded in a .star rule file.
 type TestCase struct {
-	Command string
-	Args    []string
-	Expect  string // "allow", "deny", "escalate"
+	Command  string
+	Args     []string
+	Expect   string // "allow", "deny", "escalate"
+	Metadata *Metadata
+}
+
+// Metadata is the optional request-level metadata passed to rules whose
+// check function accepts three parameters. Zero values mean "not set".
+type Metadata struct {
+	TimeoutSeconds          int
+	ExpectedDurationSeconds int
+	Justification           string
+	SafetyArg               string
 }
 
 // CheckResult is the result of evaluating a command against a Starlark rule.
@@ -86,8 +100,15 @@ func LoadRuleFromSource(filename, source string) (*Rule, error) {
 	if !ok {
 		return nil, fmt.Errorf("check must be a function")
 	}
-	if checkFn.NumParams() != 2 {
-		return nil, fmt.Errorf("check function must take 2 parameters (command, args)")
+	wantsMeta := false
+	switch checkFn.NumParams() {
+	case 2:
+		// (command, args) — existing rules unchanged.
+	case 3:
+		// (command, args, meta) — opt-in to request metadata.
+		wantsMeta = true
+	default:
+		return nil, fmt.Errorf("check function must take 2 or 3 parameters (command, args[, meta])")
 	}
 
 	// Extract optional description.
@@ -126,6 +147,7 @@ func LoadRuleFromSource(filename, source string) (*Rule, error) {
 		Description: description,
 		Bypassable:  bypassable,
 		CheckFn:     checkFn,
+		WantsMeta:   wantsMeta,
 		Thread:      thread,
 		Globals:     globals,
 		Tests:       tests,
@@ -167,7 +189,7 @@ func LoadDir(dir string) ([]*Rule, error) {
 // ValidateTests runs all embedded test cases against the rule's check function.
 func (r *Rule) ValidateTests() error {
 	for i, tc := range r.Tests {
-		result, err := r.Evaluate(tc.Command, tc.Args)
+		result, err := r.EvaluateWithMeta(tc.Command, tc.Args, tc.Metadata)
 		if err != nil {
 			return fmt.Errorf("test %d (%s %s): %w", i, tc.Command, strings.Join(tc.Args, " "), err)
 		}
@@ -182,9 +204,17 @@ func (r *Rule) ValidateTests() error {
 	return nil
 }
 
-// Evaluate runs the check function against a command and args.
-// Returns nil if the rule has no opinion (check returned None).
+// Evaluate runs the check function against a command and args without
+// request metadata. Kept for backwards compatibility; rules that opt in
+// to metadata will see an empty dict.
 func (r *Rule) Evaluate(command string, args []string) (*CheckResult, error) {
+	return r.EvaluateWithMeta(command, args, nil)
+}
+
+// EvaluateWithMeta runs the check function, passing the optional
+// metadata as a third argument when the rule declared three params.
+// Returns nil if the rule has no opinion (check returned None).
+func (r *Rule) EvaluateWithMeta(command string, args []string, meta *Metadata) (*CheckResult, error) {
 	argsList := starlark.NewList(nil)
 	for _, a := range args {
 		if err := argsList.Append(starlark.String(a)); err != nil {
@@ -192,10 +222,15 @@ func (r *Rule) Evaluate(command string, args []string) (*CheckResult, error) {
 		}
 	}
 
-	result, err := starlark.Call(r.Thread, r.CheckFn, starlark.Tuple{
+	callArgs := starlark.Tuple{
 		starlark.String(command),
 		argsList,
-	}, nil)
+	}
+	if r.WantsMeta {
+		callArgs = append(callArgs, metaToStarlark(meta))
+	}
+
+	result, err := starlark.Call(r.Thread, r.CheckFn, callArgs, nil)
 	if err != nil {
 		return nil, fmt.Errorf("call check: %w", err)
 	}
@@ -237,6 +272,25 @@ func (r *Rule) Evaluate(command string, args []string) (*CheckResult, error) {
 		Decision: decision,
 		Reason:   reason,
 	}, nil
+}
+
+// metaToStarlark converts a Metadata value to a Starlark dict. A nil
+// meta is rendered as an empty dict so rules can safely call
+// meta.get("timeout_seconds", 0) without guarding for None.
+func metaToStarlark(meta *Metadata) starlark.Value {
+	d := starlark.NewDict(4)
+	if meta == nil {
+		return d
+	}
+	_ = d.SetKey(starlark.String("timeout_seconds"), starlark.MakeInt(meta.TimeoutSeconds))
+	_ = d.SetKey(starlark.String("expected_duration_seconds"), starlark.MakeInt(meta.ExpectedDurationSeconds))
+	if meta.Justification != "" {
+		_ = d.SetKey(starlark.String("justification"), starlark.String(meta.Justification))
+	}
+	if meta.SafetyArg != "" {
+		_ = d.SetKey(starlark.String("safety_arg"), starlark.String(meta.SafetyArg))
+	}
+	return d
 }
 
 func parseTests(list *starlark.List) ([]TestCase, error) {
@@ -296,11 +350,55 @@ func parseTests(list *starlark.List) ([]TestCase, error) {
 			return nil, fmt.Errorf("test expect must be a string")
 		}
 
-		tests = append(tests, TestCase{
+		tc := TestCase{
 			Command: cmd,
 			Args:    args,
 			Expect:  expect,
-		})
+		}
+
+		// Optional `meta` dict — a test can simulate request-level metadata.
+		if metaVal, found, err := dict.Get(starlark.String("meta")); err != nil {
+			return nil, err
+		} else if found {
+			metaDict, ok := metaVal.(*starlark.Dict)
+			if !ok {
+				return nil, fmt.Errorf("test meta must be a dict")
+			}
+			meta, err := starlarkDictToMeta(metaDict)
+			if err != nil {
+				return nil, fmt.Errorf("test meta: %w", err)
+			}
+			tc.Metadata = meta
+		}
+
+		tests = append(tests, tc)
 	}
 	return tests, nil
+}
+
+func starlarkDictToMeta(d *starlark.Dict) (*Metadata, error) {
+	m := &Metadata{}
+	if v, found, _ := d.Get(starlark.String("timeout_seconds")); found {
+		i, err := starlark.AsInt32(v)
+		if err != nil {
+			return nil, fmt.Errorf("timeout_seconds: %w", err)
+		}
+		m.TimeoutSeconds = i
+	}
+	if v, found, _ := d.Get(starlark.String("expected_duration_seconds")); found {
+		i, err := starlark.AsInt32(v)
+		if err != nil {
+			return nil, fmt.Errorf("expected_duration_seconds: %w", err)
+		}
+		m.ExpectedDurationSeconds = i
+	}
+	if v, found, _ := d.Get(starlark.String("justification")); found {
+		s, _ := starlark.AsString(v)
+		m.Justification = s
+	}
+	if v, found, _ := d.Get(starlark.String("safety_arg")); found {
+		s, _ := starlark.AsString(v)
+		m.SafetyArg = s
+	}
+	return m, nil
 }

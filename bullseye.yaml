@@ -452,7 +452,7 @@ targets:
     achieved: 2026-04-19
   T26.2:
     name: L1 rules can inspect time expectations and flag mismatches
-    status: identified
+    status: achieved
     value: 3.0
     cost: 3.0
     observable: true
@@ -465,6 +465,7 @@ targets:
     - T26.1
     origin: decomposition of 🎯T26
     discovered: 2026-04-19
+    achieved: 2026-04-19
   T26.3:
     name: L2 learns per-pattern durations and can flag anomalies
     status: identified

@@ -48,6 +48,13 @@ type Request struct {
 	Justification string // why the worker needs this command
 	SafetyArg     string // why the worker believes it's safe
 	ProjectType   string // project type discovered from context (e.g. "go", "node")
+	// TimeoutSeconds is the agent's declared kill-after-N-seconds bound.
+	// Zero means not set. Rules may inspect it to flag mismatches.
+	TimeoutSeconds int
+	// ExpectedDurationSeconds is the agent's estimate of how long the
+	// command should take. Zero means not set. Rules may compare it to
+	// command-specific heuristics (e.g. `sleep N` with N >> expected).
+	ExpectedDurationSeconds int
 }
 
 // EvalInfo carries policy evaluation metadata through context for audit logging.

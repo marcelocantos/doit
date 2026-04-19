@@ -125,6 +125,16 @@ Zero or omitted means no timeout / no estimate. Timeouts propagate to
 the entire process group, so `bash foo.sh` is killed along with any
 children the script spawned.
 
+A built-in L1 rule (`flag-duration-mismatch`, bypassable) deny-flags
+commands whose duration is knowable from the command itself (today:
+`sleep N`) and obviously exceeds the declared
+`expected_duration_seconds`. The threshold is 2× — `sleep 30` with
+`expected_duration_seconds=10` is flagged; `sleep 20` is not. Starlark
+rules may opt in to expectation-aware logic by declaring a third
+`meta` parameter on their `check` function; `meta` is a dict carrying
+`timeout_seconds`, `expected_duration_seconds`, `justification`, and
+`safety_arg`.
+
 ## Safety tiers
 
 Each capability has a safety tier: read, build, write, or dangerous.

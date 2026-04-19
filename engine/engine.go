@@ -1450,11 +1450,13 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 	}
 
 	policyReq := &policy.Request{
-		Command:       cmdStr,
-		Cwd:           req.Cwd,
-		Retry:         req.Retry,
-		Justification: req.Justification,
-		SafetyArg:     req.SafetyArg,
+		Command:                 cmdStr,
+		Cwd:                     req.Cwd,
+		Retry:                   req.Retry,
+		Justification:           req.Justification,
+		SafetyArg:               req.SafetyArg,
+		TimeoutSeconds:          req.TimeoutSeconds,
+		ExpectedDurationSeconds: req.ExpectedDurationSeconds,
 	}
 	if e.projectCtx != nil {
 		policyReq.ProjectType = string(e.projectCtx.Type)

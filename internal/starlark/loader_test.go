@@ -143,8 +143,8 @@ def check(command):
 tests = [{"command": "x", "args": [], "expect": "escalate"}]
 `
 	_, err := LoadRuleFromSource("test.star", src)
-	if err == nil || !strings.Contains(err.Error(), "check function must take 2 parameters") {
-		t.Errorf("expected 'check function must take 2 parameters' error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "check function must take 2 or 3 parameters") {
+		t.Errorf("expected 'check function must take 2 or 3 parameters' error, got: %v", err)
 	}
 }
 

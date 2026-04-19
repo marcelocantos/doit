@@ -56,6 +56,16 @@ func NewLevel1WithStarlark(cfgRules map[string]rules.CapRuleConfig, starlarkEval
 		Check:       checkGitCheckoutAll,
 	})
 
+	// Time-expectation sanity (bypassable): flag obvious mismatches
+	// between a declared expected_duration_seconds and a command whose
+	// duration we can infer directly (today: sleep N).
+	l.rules = append(l.rules, Rule{
+		ID:          "flag-duration-mismatch",
+		Description: "Flag commands whose duration obviously exceeds the agent's expected_duration_seconds",
+		Bypassable:  true,
+		Check:       checkDurationMismatch,
+	})
+
 	return l
 }
 
@@ -78,7 +88,13 @@ func (l *Level1) Evaluate(req *Request) *Result {
 		if len(parts) > 0 {
 			capName := parts[0]
 			args := parts[1:]
-			starResult, ruleID, starBypassable := l.starlark.EvaluateCommand(capName, args, req.Retry)
+			meta := &doitstar.Metadata{
+				TimeoutSeconds:          req.TimeoutSeconds,
+				ExpectedDurationSeconds: req.ExpectedDurationSeconds,
+				Justification:           req.Justification,
+				SafetyArg:               req.SafetyArg,
+			}
+			starResult, ruleID, starBypassable := l.starlark.EvaluateCommandWithMeta(capName, args, req.Retry, meta)
 			if starResult != nil {
 				dec := Escalate
 				switch starResult.Decision {
@@ -293,6 +309,69 @@ func checkGitCheckoutAll(req *Request) *Result {
 		}
 	}
 	return nil
+}
+
+// durationMismatchFactor is how much larger a detected sleep duration
+// must be than the declared expected_duration_seconds before the rule
+// fires. A 2× buffer avoids flagging commands that modestly overrun.
+const durationMismatchFactor = 2
+
+// checkDurationMismatch inspects the command for a bare `sleep N` at
+// the head and, when the agent has supplied expected_duration_seconds,
+// flags mismatches where the sleep alone blows through the declared
+// budget by more than durationMismatchFactor×.
+//
+// Scope: only commands whose first two fields are `sleep <number>`.
+// Shell composition after that still runs the sleep, so we still flag
+// (e.g. `sleep 3600 && echo done` with expected=5 is clearly wrong).
+func checkDurationMismatch(req *Request) *Result {
+	if req.ExpectedDurationSeconds <= 0 {
+		return nil
+	}
+	parts := strings.Fields(req.Command)
+	if len(parts) < 2 || parts[0] != "sleep" {
+		return nil
+	}
+	sleepSeconds, ok := parseIntSeconds(parts[1])
+	if !ok {
+		return nil
+	}
+	threshold := req.ExpectedDurationSeconds * durationMismatchFactor
+	if sleepSeconds <= threshold {
+		return nil
+	}
+	return &Result{
+		Decision: Deny,
+		Level:    1,
+		Reason: fmt.Sprintf(
+			"sleep %ds exceeds declared expected_duration_seconds=%d (config rule, bypassable)",
+			sleepSeconds, req.ExpectedDurationSeconds,
+		),
+		RuleID: "flag-duration-mismatch",
+	}
+}
+
+// parseIntSeconds parses a non-negative integer from a string. Returns
+// (0, false) on any parse error — the rule silently declines rather
+// than flagging non-numeric sleep arguments (e.g. `sleep infinity`).
+func parseIntSeconds(s string) (int, bool) {
+	if s == "" {
+		return 0, false
+	}
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + int(c-'0')
+		if n > 1_000_000_000 {
+			// Sanity: any sleep longer than ~32 years is almost certainly
+			// a mismatch regardless of expectation, but cap to avoid
+			// overflow. Callers treat "caps out" as "flag it".
+			return 1_000_000_000, true
+		}
+	}
+	return n, true
 }
 
 // --- Config rule compilation ---

@@ -14,16 +14,24 @@ func NewEvaluator(rules []*Rule) *Evaluator {
 	return &Evaluator{rules: rules}
 }
 
-// EvaluateCommand runs a command against all loaded Starlark rules.
-// The first definitive result (allow or deny) wins.
-// If bypassable rules should be skipped (retry=true), they are skipped.
-// Returns nil if no rule has an opinion.
+// EvaluateCommand runs a command against all loaded Starlark rules
+// without any request metadata. See EvaluateCommandWithMeta for the
+// full form.
 func (e *Evaluator) EvaluateCommand(command string, args []string, retry bool) (result *CheckResult, ruleID string, bypassable bool) {
+	return e.EvaluateCommandWithMeta(command, args, retry, nil)
+}
+
+// EvaluateCommandWithMeta runs a command against all loaded Starlark
+// rules, passing optional request-level metadata to rules that opted
+// in. The first definitive result (allow or deny) wins. Bypassable
+// rules are skipped when retry=true. Returns nil if no rule has an
+// opinion.
+func (e *Evaluator) EvaluateCommandWithMeta(command string, args []string, retry bool, meta *Metadata) (result *CheckResult, ruleID string, bypassable bool) {
 	for _, rule := range e.rules {
 		if rule.Bypassable && retry {
 			continue
 		}
-		r, err := rule.Evaluate(command, args)
+		r, err := rule.EvaluateWithMeta(command, args, meta)
 		if err != nil {
 			// Rule evaluation error — treat as no opinion and continue.
 			continue
