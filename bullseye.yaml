@@ -429,6 +429,33 @@ targets:
     context: 'Agents submitting commands to doit rarely know how long they''ll take, and doit has no way to reason about it. A time expectation (timeout, estimated duration, or both) attached to each request would enable two things: (1) static analysis — L1/L2 rules could flag suspicious mismatches (e.g., `sleep 3600` with a 10s expectation, or `make` with a 1s expectation), and (2) runtime management — doit could kill runaway processes, warn on unexpected delays, and collect timing data to improve L2 learned patterns. The expectation could come from the agent (MCP request field), from L2 learned history, or from project config.'
     origin: user idea, session 2026-04-13
     discovered: 2026-04-13
+  T27:
+    name: Shell script execution is gated by content-hash approval
+    status: identified
+    value: 0.0
+    cost: 0.0
+    observable: true
+    acceptance:
+    - Running `bash <script>` / `sh <script>` / `./<script>` via doit triggers an elicitation on first encounter that displays the resolved script path and a content preview
+    - User approval records the SHA-256 of the script contents in a persistent store
+    - Subsequent invocations of the same script with unchanged contents run without re-prompting
+    - Modifying the script changes the hash and forces re-approval
+    - Audit log records both the initial approval (with hash) and each subsequent hash-matched execution
+    - agents-guide.md documents the script-hash trust model and its interaction with the tier/policy engine
+    - A CLI / MCP tool exists to list and revoke approved script hashes
+    context: |-
+      When an agent asks doit to run a shell script (e.g. `bash foo.sh`, `sh foo.sh`, `zsh foo.sh`, `./foo.sh`), the contents of the script are effectively arbitrary code — the command-string inspection doit performs on a single invocation tells us nothing about what the script will do once running. Today doit would evaluate only the outer command (`bash`, `./foo.sh`) against its tier/policy engine, which is insufficient.
+
+      The desired behaviour: on first encounter with a script, doit hashes the script contents (SHA-256), pauses for an explicit user confirmation via MCP elicitation (showing the path and a content digest/preview), and records the approved hash. Subsequent invocations with a matching hash proceed without re-prompting. If the file is modified, the hash changes and the user must re-approve.
+
+      Design considerations to resolve during convergence:
+      - Scope: which interpreters/forms trigger script-hash gating? At minimum, explicit `bash|sh|zsh <path>` and direct execution of a file with a shell shebang. `python`, `node`, and other interpreters should probably share the mechanism but can be a follow-up.
+      - Storage: approved hashes likely belong alongside the L2 learned-patterns store (per-project or per-user, mirroring existing policy persistence). Decide scope carefully — a hash approved in one project should probably not auto-apply to another.
+      - Trust model: hash approval is effectively a blanket "I trust this content", so the gating bypasses normal per-command tier checks for work done *inside* the script. Document this explicitly in agents-guide.md.
+      - Interaction with `--retry` / self-audit / L3 promotion: hash approval is a separate axis from the three-level policy engine; it should compose cleanly (e.g. even hardcoded-dangerous patterns in a script shouldn't be rubber-stamped by hash approval alone — or should they? needs a decision).
+      - CLI UX for rotating/revoking approved hashes.
+    origin: manual
+    discovered: 2026-04-18
   T3:
     name: Starlark L1 rules
     status: achieved
