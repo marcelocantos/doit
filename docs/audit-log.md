@@ -88,7 +88,7 @@ maintenance activities. Append-only — newest entries at the bottom.
 
 ## 2026-04-19 — /release v0.6.0
 
-- **Commit**: `pending`
+- **Commit**: `d63ec93`
 - **Outcome**: Released v0.6.0 (darwin-arm64, linux-amd64, linux-arm64).
   Three new capability groups landed this release:
   - **Shell-script content-hash approval** (🎯T27): tier-0 gate before
