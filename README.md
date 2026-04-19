@@ -81,6 +81,9 @@ automatically.
 | `doit_policy_review` | List L2 entries overdue for review |
 | `doit_self_audit` | Audit the rule set for contradictions, stale entries, and missing Starlark IDs |
 | `doit_list_capabilities` | List capabilities and their safety tiers |
+| `doit_approvals_list` | List approved shell-script content hashes |
+| `doit_approvals_revoke` | Revoke a script-content-hash approval |
+| `doit_durations_list` | List learned per-pattern duration statistics |
 
 **Audit log**
 
@@ -161,6 +164,60 @@ rules:
 Projects can add a `.doit/config.yaml` that tightens global policy — it can
 add rules and disable tiers but cannot remove global rules or enable disabled
 tiers.
+
+## Shell-script content-hash approval
+
+Inspecting a single `bash foo.sh` invocation tells the policy engine
+nothing about what the script will do once it runs. doit adds a tier-0
+gate (before L1/L2/L3) that fires on plain shell-script invocations and
+asks the user for an explicit approval keyed by SHA-256 of the script
+contents.
+
+- First encounter: doit elicits the user with the resolved path, size,
+  hash, and content preview.
+- Subsequent runs with the same content bypass the prompt.
+- Modifying the script changes the hash and forces re-approval.
+- Approvals persist in `~/.config/doit/script-approvals.yaml` (per
+  user; keyed by content so they work across projects).
+
+Scope: the gate fires for `bash|sh|zsh <path>` and `./<path>` when
+the file has a shell shebang. Pipelines, compound commands, `bash -c`
+inline scripts, and non-shell interpreters (python, node) fall
+through to normal policy.
+
+Trust model: approving a script is blanket content-trust. Commands
+*inside* the script are not evaluated by the policy engine. Read the
+preview carefully before approving. Use `doit_approvals_list` to
+inspect and `doit_approvals_revoke` to rescind.
+
+## Time expectations
+
+`doit_execute` and `doit_dry_run` accept two optional time-expectation
+fields:
+
+- `timeout_seconds` — hard ceiling. If set, doit kills the entire
+  process group on expiry (SIGKILL, exit code 137).
+- `expected_duration_seconds` — soft estimate, recorded in the audit
+  log. Used by learning and anomaly detection.
+
+```json
+{"command": "curl https://slow.example.com/data", "timeout_seconds": 30}
+{"command": "make test", "expected_duration_seconds": 15}
+```
+
+doit learns typical per-pattern durations from successful audit
+entries (grouped by capability + subcommand) and persists p50/p95 in
+`~/.config/doit/duration-stats.yaml`. Two bypassable rules use the
+learned distribution:
+
+- `flag-duration-mismatch` (L1) — `sleep N` where N > 2 ×
+  `expected_duration_seconds`.
+- `duration-anomaly` (L2) — agent's `expected_duration_seconds` below
+  p50/5 or above p95×5 for a pattern with ≥5 samples.
+- `timeout-too-short` (L2) — `timeout_seconds` below learned p50.
+
+All three are skipped under `--retry`. Inspect the learned store via
+`doit_durations_list`.
 
 ## Audit log
 
