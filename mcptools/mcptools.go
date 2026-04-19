@@ -117,6 +117,27 @@ func Register(srv *server.MCPServer, eng *engine.Engine) {
 		handlePolicyDelete(eng),
 	)
 
+	// Script-content-hash approval management.
+	srv.AddTool(
+		mcp.NewTool("doit_approvals_list",
+			mcp.WithDescription("List approved shell-script content hashes. "+
+				"Approvals are keyed by SHA-256 of the script contents; the path hint is "+
+				"informational. Modifying an approved script changes its hash and forces "+
+				"re-approval on next invocation."),
+		),
+		handleApprovalsList(eng),
+	)
+
+	srv.AddTool(
+		mcp.NewTool("doit_approvals_revoke",
+			mcp.WithDescription("Revoke approval for a script content hash. "+
+				"The next invocation of a script with that content will require "+
+				"re-approval via elicitation."),
+			mcp.WithString("hash", mcp.Required(), mcp.Description("The script content hash to revoke (sha256:...)")),
+		),
+		handleApprovalsRevoke(eng),
+	)
+
 	// Policy review and self-audit tools.
 	srv.AddTool(
 		mcp.NewTool("doit_policy_review",
@@ -209,6 +230,25 @@ func handleExecute(srv *server.MCPServer, eng *engine.Engine) server.ToolHandler
 		// Phase 1: Evaluate policy before executing.
 		evalResult := eng.Evaluate(ctx, r)
 
+		// Script-hash gate: unapproved shell-script invocations use a
+		// dedicated elicitation that shows the resolved path and content
+		// preview. On approval we persist the hash and re-invoke Execute,
+		// which finds the stored hash and runs the script.
+		if evalResult.ScriptApproval != nil {
+			approved, err := elicitScriptApproval(ctx, srv, evalResult.ScriptApproval)
+			if err != nil || !approved {
+				return mcp.NewToolResultError(fmt.Sprintf("Script approval denied: %s", evalResult.ScriptApproval.Path)), nil
+			}
+			if _, err := eng.ApproveScript(
+				evalResult.ScriptApproval.ContentHash,
+				evalResult.ScriptApproval.Path,
+				r.Justification,
+			); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to record approval: %v", err)), nil
+			}
+			return executeAndRespond(ctx, eng, r)
+		}
+
 		if evalResult.Decision == "escalate" || evalResult.Decision == "deny" {
 			if evalResult.Bypassable || evalResult.Decision == "escalate" {
 				decision, err := elicitPolicyDecision(ctx, srv, command, evalResult)
@@ -246,6 +286,50 @@ func handleExecute(srv *server.MCPServer, eng *engine.Engine) server.ToolHandler
 
 		return executeAndRespond(ctx, eng, r)
 	}
+}
+
+// elicitScriptApproval presents an unapproved shell-script invocation to
+// the user via MCP elicitation, showing the resolved path, size, hash,
+// and a content preview. Returns true if the user approves.
+func elicitScriptApproval(ctx context.Context, srv *server.MCPServer, info *engine.ScriptApprovalRequest) (bool, error) {
+	message := fmt.Sprintf(
+		"Shell script requires content-hash approval (first encounter).\n\n"+
+			"Path: %s\nInterpreter: %s\nSize: %d bytes\nHash: %s\n\n"+
+			"--- Content preview ---\n%s-----------------------\n\n"+
+			"Approval is recorded by content hash: future invocations of the same "+
+			"contents run without prompting; modifications force re-approval.",
+		info.Path, info.Interpreter, info.SizeBytes, info.ContentHash, info.ContentPreview,
+	)
+
+	result, err := srv.RequestElicitation(ctx, mcp.ElicitationRequest{
+		Params: mcp.ElicitationParams{
+			Message: message,
+			RequestedSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"decision": map[string]any{
+						"type":        "string",
+						"description": "Approve or deny execution of this script content",
+						"enum":        []string{"approve", "deny"},
+						"default":     "deny",
+					},
+				},
+				"required": []string{"decision"},
+			},
+		},
+	})
+	if err != nil {
+		return false, err
+	}
+	if result.Action != mcp.ElicitationResponseActionAccept {
+		return false, nil
+	}
+	data, ok := result.Content.(map[string]any)
+	if !ok {
+		return false, nil
+	}
+	decision, _ := data["decision"].(string)
+	return decision == "approve", nil
 }
 
 // elicitPolicyDecision presents a policy escalation to the user via MCP
@@ -513,6 +597,33 @@ func handlePolicyDelete(eng *engine.Engine) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(fmt.Sprintf("Delete failed: %v", err)), nil
 		}
 		return mcp.NewToolResultText(fmt.Sprintf("Deleted policy entry %q.", id)), nil
+	}
+}
+
+func handleApprovalsList(eng *engine.Engine) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		approvals, err := eng.ListScriptApprovals()
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to load approvals: %v", err)), nil
+		}
+		if len(approvals) == 0 {
+			return mcp.NewToolResultText("No approved script hashes."), nil
+		}
+		data, _ := json.MarshalIndent(approvals, "", "  ")
+		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+func handleApprovalsRevoke(eng *engine.Engine) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		hash := argString(req.GetArguments(), "hash")
+		if hash == "" {
+			return mcp.NewToolResultError("missing required parameter: hash"), nil
+		}
+		if err := eng.RevokeScriptApproval(hash); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Revoke failed: %v", err)), nil
+		}
+		return mcp.NewToolResultText(fmt.Sprintf("Revoked approval for %s.", hash)), nil
 	}
 }
 

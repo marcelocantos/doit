@@ -27,6 +27,7 @@ import (
 	doitctx "github.com/marcelocantos/doit/internal/context"
 	"github.com/marcelocantos/doit/internal/llm"
 	"github.com/marcelocantos/doit/internal/policy"
+	"github.com/marcelocantos/doit/internal/script"
 	doitstar "github.com/marcelocantos/doit/internal/starlark"
 )
 
@@ -71,6 +72,22 @@ type EvalResult struct {
 	Reason     string // human-readable explanation
 	RuleID     string // which rule matched
 	Bypassable bool   // true if the denial can be overridden by the user
+	// ScriptApproval is non-nil when the engine detected a shell-script
+	// invocation whose contents have not been approved. The caller
+	// (typically the MCP handler) should show the content preview to
+	// the user and, on approval, call Engine.ApproveScript before
+	// invoking Execute.
+	ScriptApproval *ScriptApprovalRequest
+}
+
+// ScriptApprovalRequest describes an unapproved script invocation
+// surfaced to the caller for a user decision.
+type ScriptApprovalRequest struct {
+	Interpreter    string // "bash" | "sh" | "zsh" | "direct"
+	Path           string // absolute resolved script path
+	ContentHash    string // "sha256:<hex>"
+	ContentPreview string // truncated preview for display
+	SizeBytes      int64  // script size on disk
 }
 
 // WorkSession represents an active work session where L3 evaluations
@@ -102,6 +119,8 @@ type Engine struct {
 	storePath  string
 	promoteCh  chan struct{}
 	projectCtx *doitctx.ProjectContext // discovered project context (may be nil)
+
+	scriptStore *script.Store
 
 	l1Mu      sync.RWMutex
 	l2Mu      sync.RWMutex
@@ -158,11 +177,12 @@ func New(opts Options, engineOpts ...EngineOption) (*Engine, error) {
 	}
 
 	e := &Engine{
-		cfg:       cfg,
-		reg:       reg,
-		logger:    logger,
-		storePath: cfg.Policy.Level2Path,
-		promoteCh: make(chan struct{}, 1),
+		cfg:         cfg,
+		reg:         reg,
+		logger:      logger,
+		storePath:   cfg.Policy.Level2Path,
+		promoteCh:   make(chan struct{}, 1),
+		scriptStore: script.NewStore(""),
 	}
 
 	// Discover project context from project root (best-effort; non-fatal).
@@ -380,11 +400,108 @@ func (e *Engine) ActiveSession() *WorkSession {
 	return ws
 }
 
+// scriptGateOutcome describes the result of the pre-policy script-hash
+// check. The outer script invocation is handled entirely by this gate
+// (bypassing L1/L2/L3) when applicable; commands that are not script
+// invocations fall through to normal policy.
+type scriptGateOutcome struct {
+	Applicable bool                   // the command is a recognised script invocation
+	Approved   bool                   // Applicable && content hash is in the approval store
+	Invocation *script.Invocation     // non-nil when Applicable
+	Hash       string                 // content hash when Applicable
+	Approval   *ScriptApprovalRequest // non-nil when Applicable && !Approved
+	Err        error                  // set when detection or hashing failed
+}
+
+// runScriptGate inspects req and returns the outcome of the
+// content-hash gate. Never returns nil; check fields to interpret.
+func (e *Engine) runScriptGate(req Request) scriptGateOutcome {
+	if req.Command == "" {
+		return scriptGateOutcome{}
+	}
+	inv, err := script.Detect(req.Command, req.Cwd)
+	if err != nil {
+		return scriptGateOutcome{Applicable: true, Err: err}
+	}
+	if inv == nil {
+		return scriptGateOutcome{}
+	}
+
+	hash, err := script.Hash(inv.ResolvedPath)
+	if err != nil {
+		return scriptGateOutcome{Applicable: true, Invocation: inv, Err: err}
+	}
+
+	existing, err := e.scriptStore.Lookup(hash)
+	if err != nil {
+		return scriptGateOutcome{Applicable: true, Invocation: inv, Hash: hash, Err: err}
+	}
+	if existing != nil {
+		return scriptGateOutcome{
+			Applicable: true,
+			Approved:   true,
+			Invocation: inv,
+			Hash:       hash,
+		}
+	}
+
+	preview, _ := script.Preview(inv.ResolvedPath)
+	var size int64
+	if info, err := os.Stat(inv.ResolvedPath); err == nil {
+		size = info.Size()
+	}
+	return scriptGateOutcome{
+		Applicable: true,
+		Invocation: inv,
+		Hash:       hash,
+		Approval: &ScriptApprovalRequest{
+			Interpreter:    inv.Interpreter,
+			Path:           inv.ResolvedPath,
+			ContentHash:    hash,
+			ContentPreview: preview,
+			SizeBytes:      size,
+		},
+	}
+}
+
+// scriptGateDenialResult builds an EvalResult or Result-shaped denial
+// from a script-gate error (detection or hashing failure).
+func scriptGateDenyReason(outcome scriptGateOutcome) string {
+	return fmt.Sprintf("script-hash gate: %v", outcome.Err)
+}
+
 // Evaluate runs the policy chain without executing the command.
 // Returns the policy decision. Segment/tier analysis is a detail of the
 // individual policy layers and is not surfaced at this level.
 func (e *Engine) Evaluate(ctx context.Context, req Request) *EvalResult {
 	args := req.args()
+
+	if sg := e.runScriptGate(req); sg.Applicable {
+		if sg.Err != nil {
+			return &EvalResult{
+				Decision: "deny",
+				Level:    0,
+				Reason:   scriptGateDenyReason(sg),
+				RuleID:   "script-hash-error",
+			}
+		}
+		if sg.Approved {
+			return &EvalResult{
+				Decision: "allow",
+				Level:    0,
+				Reason:   "script content previously approved",
+				RuleID:   "script-hash-approved",
+			}
+		}
+		return &EvalResult{
+			Decision:       "escalate",
+			Level:          0,
+			Reason:         "unapproved script content — requires user review",
+			RuleID:         "script-hash-pending",
+			Bypassable:     true,
+			ScriptApproval: sg.Approval,
+		}
+	}
 
 	result, _, _ := e.evaluatePolicy(ctx, args, req)
 	if result == nil {
@@ -403,10 +520,160 @@ func (e *Engine) Evaluate(ctx context.Context, req Request) *EvalResult {
 	}
 }
 
+// handleScriptGate short-circuits Execute-style flows when the outer
+// command is a shell-script invocation. Returns (result, true) when the
+// script gate handled the request (denial, escalation, or approved run);
+// returns (nil, false) when policy should proceed normally.
+func (e *Engine) handleScriptGate(ctx context.Context, req Request, stdout, stderr io.Writer) (*Result, bool) {
+	sg := e.runScriptGate(req)
+	if !sg.Applicable {
+		return nil, false
+	}
+	if sg.Err != nil {
+		reason := scriptGateDenyReason(sg)
+		e.logScriptEvent(req, "deny", "script-hash-error", "", "", reason, 1)
+		if stderr != nil {
+			fmt.Fprintf(stderr, "doit: %s\n", reason)
+		}
+		return &Result{
+			ExitCode:       1,
+			Stderr:         fmt.Sprintf("doit: %s", reason),
+			PolicyLevel:    0,
+			PolicyDecision: "deny",
+			PolicyReason:   reason,
+			PolicyRuleID:   "script-hash-error",
+		}, true
+	}
+	if !sg.Approved {
+		reason := "unapproved script content — approve via doit_execute elicitation"
+		e.logScriptEvent(req, "escalate", "script-hash-pending", sg.Hash, sg.Invocation.ResolvedPath, reason, 1)
+		if stderr != nil {
+			fmt.Fprintf(stderr, "doit: policy: %s\n", reason)
+		}
+		return &Result{
+			ExitCode:       1,
+			Stderr:         fmt.Sprintf("doit: policy: %s", reason),
+			PolicyLevel:    0,
+			PolicyDecision: "escalate",
+			PolicyReason:   reason,
+			PolicyRuleID:   "script-hash-pending",
+		}, true
+	}
+
+	// Approved — record use, run the command, and audit with script fields.
+	_ = e.scriptStore.RecordUse(sg.Hash)
+
+	ctx = policy.NewEvalContext(ctx, &policy.EvalInfo{
+		Level:         0,
+		Decision:      "allow",
+		RuleID:        "script-hash-matched",
+		Justification: req.Justification,
+		SafetyArg:     req.SafetyArg,
+	})
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	var outW io.Writer = &stdoutBuf
+	var errW io.Writer = &stderrBuf
+	if stdout != nil {
+		outW = stdout
+	}
+	if stderr != nil {
+		errW = stderr
+	}
+	exitCode := e.runScriptCommand(ctx, req, sg, outW, errW)
+
+	res := &Result{
+		ExitCode:       exitCode,
+		PolicyLevel:    0,
+		PolicyDecision: "allow",
+		PolicyReason:   "script content previously approved",
+		PolicyRuleID:   "script-hash-matched",
+	}
+	if stdout == nil {
+		res.Stdout = stdoutBuf.String()
+	}
+	if stderr == nil {
+		res.Stderr = stderrBuf.String()
+	}
+	return res, true
+}
+
+// runScriptCommand runs an approved script invocation via sh -c and
+// writes an audit entry that carries the script hash and path.
+func (e *Engine) runScriptCommand(ctx context.Context, req Request, sg scriptGateOutcome, stdout, stderr io.Writer) int {
+	cmdStr := req.Command
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if req.Cwd != "" {
+		cmd.Dir = req.Cwd
+	}
+	if req.Env != nil {
+		cmd.Env = os.Environ()
+		for k, v := range req.Env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+	}
+
+	start := time.Now()
+	err := cmd.Run()
+	duration := time.Since(start)
+
+	exitCode := 0
+	errMsg := ""
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = 2
+			errMsg = err.Error()
+			fmt.Fprintf(stderr, "doit: %v\n", err)
+		}
+	}
+
+	if e.logger != nil {
+		opts := &audit.LogOptions{
+			PolicyLevel:   0,
+			PolicyResult:  "allow",
+			PolicyRuleID:  "script-hash-matched",
+			Justification: req.Justification,
+			SafetyArg:     req.SafetyArg,
+			ScriptHash:    sg.Hash,
+			ScriptPath:    sg.Invocation.ResolvedPath,
+		}
+		_ = e.logger.Log(cmdStr, []string{sg.Invocation.Interpreter}, []string{"script"}, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
+	}
+	return exitCode
+}
+
+// logScriptEvent writes an audit entry for a script-gate denial or
+// escalation. No command is executed; duration is 0.
+func (e *Engine) logScriptEvent(req Request, decision, ruleID, hash, scriptPath, reason string, exitCode int) {
+	if e.logger == nil {
+		return
+	}
+	opts := &audit.LogOptions{
+		PolicyLevel:   0,
+		PolicyResult:  decision,
+		PolicyRuleID:  ruleID,
+		Justification: req.Justification,
+		SafetyArg:     req.SafetyArg,
+		ScriptHash:    hash,
+		ScriptPath:    scriptPath,
+	}
+	_ = e.logger.Log(req.Command, nil, nil, exitCode, reason, 0, req.Cwd, req.Retry, opts)
+}
+
 // Execute evaluates policy and, if allowed, runs the command via sh -c.
 // Shell composition (pipes, redirects, &&, ||) is handled by the shell;
 // doit passes the command string through unchanged.
 func (e *Engine) Execute(ctx context.Context, req Request) *Result {
+	if res, handled := e.handleScriptGate(ctx, req, nil, nil); handled {
+		return res
+	}
+
 	args := req.args()
 
 	// Policy evaluation.
@@ -487,6 +754,12 @@ func (e *Engine) Execute(ctx context.Context, req Request) *Result {
 // ExecuteStreaming is like Execute but writes stdout/stderr to the provided
 // writers instead of buffering. Returns the result (Stdout/Stderr will be empty).
 func (e *Engine) ExecuteStreaming(ctx context.Context, req Request, stdout, stderr io.Writer) *Result {
+	if res, handled := e.handleScriptGate(ctx, req, stdout, stderr); handled {
+		res.Stdout = ""
+		res.Stderr = ""
+		return res
+	}
+
 	args := req.args()
 
 	pResult, segments, tiers := e.evaluatePolicy(ctx, args, req)
@@ -643,6 +916,60 @@ func (e *Engine) StorePath() string {
 // StarlarkRulesDir returns the configured Starlark rules directory.
 func (e *Engine) StarlarkRulesDir() string {
 	return e.cfg.Policy.StarlarkRulesDir
+}
+
+// ScriptApprovalStorePath returns the file path backing the
+// script-content-hash approval store.
+func (e *Engine) ScriptApprovalStorePath() string {
+	return e.scriptStore.Path()
+}
+
+// ApproveScript records a user approval for a script content hash. The
+// pathHint is stored for display/audit context only — identity is by
+// hash alone. Writes an audit entry marking the approval.
+func (e *Engine) ApproveScript(hash, pathHint, justification string) (*script.Approval, error) {
+	if hash == "" {
+		return nil, fmt.Errorf("hash is required")
+	}
+	entry, err := e.scriptStore.Approve(hash, pathHint, justification)
+	if err != nil {
+		return nil, err
+	}
+	if e.logger != nil {
+		opts := &audit.LogOptions{
+			PolicyLevel:   0,
+			PolicyResult:  "allow",
+			PolicyRuleID:  "script-hash-approved",
+			Justification: justification,
+			ScriptHash:    hash,
+			ScriptPath:    pathHint,
+		}
+		_ = e.logger.Log("<script-approval>", []string{"script"}, []string{"script"}, 0, "", 0, "", false, opts)
+	}
+	return entry, nil
+}
+
+// RevokeScriptApproval removes an approval for the given content hash.
+// Returns an error if no such approval exists.
+func (e *Engine) RevokeScriptApproval(hash string) error {
+	if err := e.scriptStore.Revoke(hash); err != nil {
+		return err
+	}
+	if e.logger != nil {
+		opts := &audit.LogOptions{
+			PolicyLevel:  0,
+			PolicyResult: "deny",
+			PolicyRuleID: "script-hash-revoked",
+			ScriptHash:   hash,
+		}
+		_ = e.logger.Log("<script-revocation>", []string{"script"}, []string{"script"}, 0, "", 0, "", false, opts)
+	}
+	return nil
+}
+
+// ListScriptApprovals returns all recorded script approvals.
+func (e *Engine) ListScriptApprovals() ([]script.Approval, error) {
+	return e.scriptStore.List()
 }
 
 // OverdueReviews returns L2 policy entries that are due for review.

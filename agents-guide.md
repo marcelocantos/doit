@@ -58,6 +58,8 @@ interface for command execution.
 | `doit_policy_review` | List L2 entries that are overdue for review |
 | `doit_self_audit` | Run a self-audit of the rule set — contradictions, stale entries, missing Starlark IDs, duplicate coverage |
 | `doit_list_capabilities` | List registered capabilities and their tiers |
+| `doit_approvals_list` | List approved shell-script content hashes |
+| `doit_approvals_revoke` | Revoke a script-content-hash approval |
 
 ### Audit log
 
@@ -132,11 +134,75 @@ creating a permanent Starlark rule at varying generality levels.
 3. **Policy escalation** — The policy engine needs human review. The
    user will be prompted with the policy reasoning and options.
 
+## Shell-script content-hash approval
+
+The single-command inspection doit performs for `bash foo.sh` or
+`./foo.sh` tells the policy engine nothing about what the script will
+do once it starts running. To close this gap, doit runs a dedicated
+content-hash gate *before* L1/L2/L3 whenever the command is a plain
+shell-script invocation.
+
+### Scope
+
+The gate fires for commands of exactly these forms (after shell-word
+tokenisation):
+
+- `bash <path> [args…]`, `sh <path> [args…]`, `zsh <path> [args…]`
+  (including path-qualified forms like `/bin/bash foo.sh`).
+- Direct execution of a file whose shebang names `bash`, `sh`, or `zsh`
+  — `./foo.sh`, `/abs/path/foo.sh`, `../foo.sh`.
+
+The gate does **not** fire for:
+
+- Pipelines (`bash foo.sh | cat`), compound commands (`… && …`, `… ; …`),
+  redirects (`> out`), subshells, command substitution, or any form
+  that contains shell metacharacters. These fall through to normal L1/L2/L3.
+- Inline interpreter invocations like `bash -c "…"` — there is no file to
+  hash, so the normal policy chain evaluates the outer `bash -c` instead.
+- Non-shell interpreters (`python script.py`, `node app.js`). These may
+  share the mechanism in a future iteration; for now they are evaluated
+  by the normal policy chain.
+
+### Trust model
+
+Hash approval is **blanket trust for a specific byte sequence**. When
+you approve `foo.sh`, you are authorising every command the script
+might run on your behalf — the shell that executes the script is not
+mediated by doit. Read the preview carefully before approving.
+
+- First encounter: doit hashes the resolved script (SHA-256), shows
+  the path, size, hash, and a truncated content preview via MCP
+  elicitation, and asks the user to approve or deny.
+- Subsequent invocations of the same content bypass elicitation and
+  run directly. Each bypass is audited with `policy_rule_id =
+  script-hash-matched` and carries both `script_hash` and
+  `script_path` fields.
+- Modifying the script changes the hash. The next invocation re-fires
+  the elicitation.
+- Approvals are keyed by hash alone — they apply across any path or
+  project where the identical content appears.
+
+### Managing approvals
+
+Approvals are stored at `~/.config/doit/script-approvals.yaml`. Use
+`doit_approvals_list` to inspect and `doit_approvals_revoke` to remove
+an entry. Revocation is also audited.
+
 ## Audit log
 
 All invocations are logged to a tamper-evident audit trail (SHA-256 hash
 chain). Use `doit_audit_verify` to check integrity and `doit_audit_tail`
 to view recent entries.
+
+Script-hash events carry two additional fields:
+
+- `script_hash` — the approved content hash (`sha256:…`)
+- `script_path` — the resolved script path at the time of the event
+
+The `policy_rule_id` distinguishes the event type: `script-hash-approved`
+(initial approval), `script-hash-matched` (subsequent bypass),
+`script-hash-pending` (escalation surfaced to user), `script-hash-revoked`
+(approval revoked), `script-hash-error` (detection or hashing failure).
 
 ## Important rules
 

@@ -117,6 +117,8 @@ func (l *Logger) Log(pipeline string, segments, tiers []string, exitCode int, er
 		entry.PolicyRuleID = opts.PolicyRuleID
 		entry.Justification = opts.Justification
 		entry.SafetyArg = opts.SafetyArg
+		entry.ScriptHash = opts.ScriptHash
+		entry.ScriptPath = opts.ScriptPath
 	}
 
 	// Compute hash with Hash field empty.

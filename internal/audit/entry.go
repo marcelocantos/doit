@@ -23,6 +23,8 @@ type Entry struct {
 	PolicyRuleID  string    `json:"policy_rule_id,omitempty"`  // which rule matched
 	Justification string    `json:"justification,omitempty"`   // worker's justification
 	SafetyArg     string    `json:"safety_arg,omitempty"`      // worker's safety argument
+	ScriptHash    string    `json:"script_hash,omitempty"`     // sha256:... when gated by script-hash approval
+	ScriptPath    string    `json:"script_path,omitempty"`     // resolved script path for script-hash events
 	Hash          string    `json:"hash"`                      // SHA-256 of this entry (with hash field empty)
 }
 
@@ -33,4 +35,6 @@ type LogOptions struct {
 	PolicyRuleID  string
 	Justification string
 	SafetyArg     string
+	ScriptHash    string
+	ScriptPath    string
 }

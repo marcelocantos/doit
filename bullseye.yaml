@@ -431,7 +431,7 @@ targets:
     discovered: 2026-04-13
   T27:
     name: Shell script execution is gated by content-hash approval
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     observable: true
@@ -456,6 +456,7 @@ targets:
       - CLI UX for rotating/revoking approved hashes.
     origin: manual
     discovered: 2026-04-18
+    achieved: 2026-04-19
   T3:
     name: Starlark L1 rules
     status: achieved
