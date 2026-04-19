@@ -119,6 +119,8 @@ func (l *Logger) Log(pipeline string, segments, tiers []string, exitCode int, er
 		entry.SafetyArg = opts.SafetyArg
 		entry.ScriptHash = opts.ScriptHash
 		entry.ScriptPath = opts.ScriptPath
+		entry.ExpectedDuration = opts.ExpectedDuration
+		entry.TimedOut = opts.TimedOut
 	}
 
 	// Compute hash with Hash field empty.

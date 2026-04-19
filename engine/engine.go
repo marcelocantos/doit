@@ -51,6 +51,15 @@ type Request struct {
 	Env           map[string]string // environment variables
 	Approved      string            // approval token for escalated commands
 	Retry         bool              // bypass config rules for this invocation
+	// TimeoutSeconds bounds command runtime. When > 0, doit kills the
+	// process on expiry (SIGKILL via context cancellation). Zero means
+	// no timeout (default).
+	TimeoutSeconds int
+	// ExpectedDurationSeconds is the agent's estimate of how long the
+	// command should take. Zero means not specified. Recorded in the
+	// audit log alongside the actual duration so L1/L2 can learn and
+	// flag mismatches.
+	ExpectedDurationSeconds int
 }
 
 // Result is returned by Execute.
@@ -600,10 +609,15 @@ func (e *Engine) handleScriptGate(ctx context.Context, req Request, stdout, stde
 
 // runScriptCommand runs an approved script invocation via sh -c and
 // writes an audit entry that carries the script hash and path.
+// Honours req.TimeoutSeconds the same way runShellCommand does.
 func (e *Engine) runScriptCommand(ctx context.Context, req Request, sg scriptGateOutcome, stdout, stderr io.Writer) int {
 	cmdStr := req.Command
 
+	ctx, cancel := withTimeoutIfSet(ctx, req.TimeoutSeconds)
+	defer cancel()
+
 	cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
+	configureProcessGroup(cmd)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if req.Cwd != "" {
@@ -622,14 +636,22 @@ func (e *Engine) runScriptCommand(ctx context.Context, req Request, sg scriptGat
 
 	exitCode := 0
 	errMsg := ""
+	timedOut := false
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			exitCode = exitErr.ExitCode()
+		if ctx.Err() == context.DeadlineExceeded {
+			timedOut = true
+			exitCode = timeoutExitCode
+			errMsg = fmt.Sprintf("timed out after %ds", req.TimeoutSeconds)
+			fmt.Fprintf(stderr, "doit: command timed out after %ds\n", req.TimeoutSeconds)
 		} else {
-			exitCode = 2
-			errMsg = err.Error()
-			fmt.Fprintf(stderr, "doit: %v\n", err)
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				exitCode = exitErr.ExitCode()
+			} else {
+				exitCode = 2
+				errMsg = err.Error()
+				fmt.Fprintf(stderr, "doit: %v\n", err)
+			}
 		}
 	}
 
@@ -642,6 +664,10 @@ func (e *Engine) runScriptCommand(ctx context.Context, req Request, sg scriptGat
 			SafetyArg:     req.SafetyArg,
 			ScriptHash:    sg.Hash,
 			ScriptPath:    sg.Invocation.ResolvedPath,
+			TimedOut:      timedOut,
+		}
+		if req.ExpectedDurationSeconds > 0 {
+			opts.ExpectedDuration = float64(req.ExpectedDurationSeconds) * 1000.0
 		}
 		_ = e.logger.Log(cmdStr, []string{sg.Invocation.Interpreter}, []string{"script"}, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
 	}
@@ -1481,13 +1507,19 @@ func (e *Engine) runCommand(ctx context.Context, args []string, req Request, std
 
 // runShellCommand executes a command via sh -c, propagating exit codes.
 // When args is non-empty, they are joined to form the command string.
+// Honours req.TimeoutSeconds: when > 0, the process is killed on expiry
+// via context cancellation.
 func (e *Engine) runShellCommand(ctx context.Context, args []string, req Request, stdout, stderr io.Writer) int {
 	cmdStr := req.Command
 	if len(args) > 0 {
 		cmdStr = strings.Join(args, " ")
 	}
 
+	ctx, cancel := withTimeoutIfSet(ctx, req.TimeoutSeconds)
+	defer cancel()
+
 	cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
+	configureProcessGroup(cmd)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if req.Cwd != "" {
@@ -1506,35 +1538,59 @@ func (e *Engine) runShellCommand(ctx context.Context, args []string, req Request
 
 	exitCode := 0
 	errMsg := ""
+	timedOut := false
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			exitCode = exitErr.ExitCode()
+		if ctx.Err() == context.DeadlineExceeded {
+			timedOut = true
+			exitCode = timeoutExitCode
+			errMsg = fmt.Sprintf("timed out after %ds", req.TimeoutSeconds)
+			fmt.Fprintf(stderr, "doit: command timed out after %ds\n", req.TimeoutSeconds)
 		} else {
-			exitCode = 2
-			errMsg = err.Error()
-			fmt.Fprintf(stderr, "doit: %v\n", err)
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				exitCode = exitErr.ExitCode()
+			} else {
+				exitCode = 2
+				errMsg = err.Error()
+				fmt.Fprintf(stderr, "doit: %v\n", err)
+			}
 		}
 	}
 
-	e.logExecution(ctx, cmdStr, nil, nil, exitCode, errMsg, duration, req)
+	e.logExecution(ctx, cmdStr, nil, nil, exitCode, errMsg, duration, req, timedOut)
 	return exitCode
 }
 
-func (e *Engine) logExecution(ctx context.Context, cmdStr string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, req Request) {
+// timeoutExitCode is returned when doit kills a process after its
+// timeout expires — 128 + SIGKILL(9) by POSIX convention.
+const timeoutExitCode = 137
+
+// withTimeoutIfSet returns a derived context with the given timeout
+// applied when seconds > 0; otherwise returns the context unchanged
+// with a no-op cancel.
+func withTimeoutIfSet(ctx context.Context, seconds int) (context.Context, context.CancelFunc) {
+	if seconds <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, time.Duration(seconds)*time.Second)
+}
+
+func (e *Engine) logExecution(ctx context.Context, cmdStr string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, req Request, timedOut bool) {
 	if e.logger == nil {
 		return
 	}
-	var opts *audit.LogOptions
+	opts := &audit.LogOptions{}
 	if info := policy.EvalFromContext(ctx); info != nil {
-		opts = &audit.LogOptions{
-			PolicyLevel:   info.Level,
-			PolicyResult:  info.Decision,
-			PolicyRuleID:  info.RuleID,
-			Justification: info.Justification,
-			SafetyArg:     info.SafetyArg,
-		}
+		opts.PolicyLevel = info.Level
+		opts.PolicyResult = info.Decision
+		opts.PolicyRuleID = info.RuleID
+		opts.Justification = info.Justification
+		opts.SafetyArg = info.SafetyArg
 	}
+	if req.ExpectedDurationSeconds > 0 {
+		opts.ExpectedDuration = float64(req.ExpectedDurationSeconds) * 1000.0
+	}
+	opts.TimedOut = timedOut
 	_ = e.logger.Log(cmdStr, segments, tiers, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
 }
 

@@ -427,8 +427,60 @@ targets:
     - Audit log records expected vs actual duration for completed commands
     - L2 learns typical durations per command pattern and can flag anomalies
     context: 'Agents submitting commands to doit rarely know how long they''ll take, and doit has no way to reason about it. A time expectation (timeout, estimated duration, or both) attached to each request would enable two things: (1) static analysis — L1/L2 rules could flag suspicious mismatches (e.g., `sleep 3600` with a 10s expectation, or `make` with a 1s expectation), and (2) runtime management — doit could kill runaway processes, warn on unexpected delays, and collect timing data to improve L2 learned patterns. The expectation could come from the agent (MCP request field), from L2 learned history, or from project config.'
+    depends_on:
+    - T26.1
+    - T26.2
+    - T26.3
     origin: user idea, session 2026-04-13
     discovered: 2026-04-13
+  T26.1:
+    name: MCP execute request accepts time expectations; runtime enforces timeout
+    status: achieved
+    value: 4.0
+    cost: 3.0
+    observable: true
+    acceptance:
+    - doit_execute and doit_dry_run schemas accept optional timeout_seconds and expected_duration_seconds fields
+    - engine.Request carries TimeoutSeconds and ExpectedDurationSeconds, propagated from MCP
+    - When TimeoutSeconds > 0, the executed process is killed on expiry via context cancellation (exit code reflects SIGKILL)
+    - Audit log entries record expected_duration_ms (when provided) alongside the existing duration_ms
+    - A clear stderr message signals timeouts to the caller
+    - Tests cover happy path, timeout-kill path, and the no-timeout (zero value) path
+    context: 'Self-contained runtime-protection leaf of 🎯T26. Delivers immediate value (agents can bound command duration; doit kills runaway processes) without requiring L1 or L2 changes. Establishes the schema/field that the static-analysis (T26.2) and learned-duration (T26.3) leaves build on. Design note: prefer flat `timeout_seconds` / `expected_duration_seconds` fields over a nested `time_expectation` object — simpler MCP tool schema and mirrors how other doit fields are exposed.'
+    origin: decomposition of 🎯T26
+    discovered: 2026-04-19
+    achieved: 2026-04-19
+  T26.2:
+    name: L1 rules can inspect time expectations and flag mismatches
+    status: identified
+    value: 3.0
+    cost: 3.0
+    observable: true
+    acceptance:
+    - Starlark rule evaluator exposes timeout_seconds and expected_duration_seconds on the request object
+    - A built-in L1 rule flags obvious mismatches (e.g. sleep seconds >> expected_duration_seconds)
+    - Test coverage demonstrates the rule firing for a mismatched request and staying silent for a matched one
+    context: Depends on the schema established by T26.1. Adds L1-level static analysis so rules can reason about declared expectations alongside the command string.
+    depends_on:
+    - T26.1
+    origin: decomposition of 🎯T26
+    discovered: 2026-04-19
+  T26.3:
+    name: L2 learns per-pattern durations and can flag anomalies
+    status: identified
+    value: 3.0
+    cost: 5.0
+    observable: true
+    acceptance:
+    - Engine's auto-promote path aggregates duration_ms per command pattern from the audit log
+    - L2 store carries an observed duration distribution per pattern (at minimum p50 and p95, or median and mad)
+    - Evaluation flags requests whose timeout_seconds or expected_duration_seconds deviates sharply from the learned distribution
+    - Test coverage demonstrates learning from a simulated audit log and flagging an anomalous request
+    context: Depends on T26.1 for the audit-log fields and the request shape. Extends L2's learned-pattern store so typical runtimes become part of the decision surface.
+    depends_on:
+    - T26.1
+    origin: decomposition of 🎯T26
+    discovered: 2026-04-19
   T27:
     name: Shell script execution is gated by content-hash approval
     status: achieved

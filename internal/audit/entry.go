@@ -17,6 +17,8 @@ type Entry struct {
 	ExitCode      int       `json:"exit_code"`                 // 0 = success
 	Error         string    `json:"error,omitempty"`           // error message if failed
 	Duration      float64   `json:"duration_ms"`               // execution time in milliseconds
+	ExpectedDuration float64 `json:"expected_duration_ms,omitempty"` // agent's estimated duration (0 = unspecified)
+	TimedOut      bool      `json:"timed_out,omitempty"`       // true when the process was killed by timeout
 	Cwd           string    `json:"cwd"`                       // working directory
 	PolicyLevel   int       `json:"policy_level,omitempty"`    // 1, 2, or 3
 	PolicyResult  string    `json:"policy_result,omitempty"`   // "allow", "deny", "escalate"
@@ -30,11 +32,13 @@ type Entry struct {
 
 // LogOptions carries optional metadata for audit entries.
 type LogOptions struct {
-	PolicyLevel   int
-	PolicyResult  string
-	PolicyRuleID  string
-	Justification string
-	SafetyArg     string
-	ScriptHash    string
-	ScriptPath    string
+	PolicyLevel      int
+	PolicyResult     string
+	PolicyRuleID     string
+	Justification    string
+	SafetyArg        string
+	ScriptHash       string
+	ScriptPath       string
+	ExpectedDuration float64 // milliseconds; 0 = unspecified
+	TimedOut         bool
 }

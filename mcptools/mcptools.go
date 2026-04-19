@@ -40,6 +40,8 @@ func Register(srv *server.MCPServer, eng *engine.Engine) {
 			mcp.WithString("safety_arg", mcp.Description("Why the agent believes the command is safe")),
 			mcp.WithString("cwd", mcp.Description("Working directory for the command")),
 			mcp.WithString("approved", mcp.Description("Approval token for previously escalated commands")),
+			mcp.WithNumber("timeout_seconds", mcp.Description("Kill the process if it runs longer than this many seconds (0 or omitted = no timeout)")),
+			mcp.WithNumber("expected_duration_seconds", mcp.Description("Agent's estimate of how long the command should take; recorded in the audit log for later analysis")),
 		),
 		handleExecute(srv, eng),
 	)
@@ -52,6 +54,8 @@ func Register(srv *server.MCPServer, eng *engine.Engine) {
 			mcp.WithString("justification", mcp.Description("Why the agent needs this command")),
 			mcp.WithString("safety_arg", mcp.Description("Why the agent believes the command is safe")),
 			mcp.WithString("cwd", mcp.Description("Working directory context")),
+			mcp.WithNumber("timeout_seconds", mcp.Description("Intended kill-after-N-seconds bound (informational for dry-run)")),
+			mcp.WithNumber("expected_duration_seconds", mcp.Description("Agent's estimate of how long the command should take (informational for dry-run)")),
 		),
 		handleDryRun(eng),
 	)
@@ -220,11 +224,13 @@ func handleExecute(srv *server.MCPServer, eng *engine.Engine) server.ToolHandler
 		}
 
 		r := engine.Request{
-			Command:       command,
-			Justification: argString(args, "justification"),
-			SafetyArg:     argString(args, "safety_arg"),
-			Cwd:           argString(args, "cwd"),
-			Approved:      argString(args, "approved"),
+			Command:                 command,
+			Justification:           argString(args, "justification"),
+			SafetyArg:               argString(args, "safety_arg"),
+			Cwd:                     argString(args, "cwd"),
+			Approved:                argString(args, "approved"),
+			TimeoutSeconds:          argInt(args, "timeout_seconds"),
+			ExpectedDurationSeconds: argInt(args, "expected_duration_seconds"),
 		}
 
 		// Phase 1: Evaluate policy before executing.
@@ -475,10 +481,12 @@ func handleDryRun(eng *engine.Engine) server.ToolHandlerFunc {
 		}
 
 		r := engine.Request{
-			Command:       command,
-			Justification: argString(args, "justification"),
-			SafetyArg:     argString(args, "safety_arg"),
-			Cwd:           argString(args, "cwd"),
+			Command:                 command,
+			Justification:           argString(args, "justification"),
+			SafetyArg:               argString(args, "safety_arg"),
+			Cwd:                     argString(args, "cwd"),
+			TimeoutSeconds:          argInt(args, "timeout_seconds"),
+			ExpectedDurationSeconds: argInt(args, "expected_duration_seconds"),
 		}
 
 		result := eng.Evaluate(ctx, r)
@@ -875,4 +883,16 @@ func findDoitInMCPServers(obj map[string]json.RawMessage) bool {
 func argString(args map[string]any, key string) string {
 	v, _ := args[key].(string)
 	return v
+}
+
+// argInt extracts an integer parameter from MCP tool args. Numbers on
+// the wire arrive as float64; callers use 0 to mean "not set".
+func argInt(args map[string]any, key string) int {
+	switch v := args[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	}
+	return 0
 }

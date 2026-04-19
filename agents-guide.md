@@ -103,6 +103,28 @@ Shell features (pipes, redirects, `&&`, `||`) work naturally:
 {"command": "make build && git add -A"}
 ```
 
+### Time expectations
+
+Two optional fields let you declare how long a command should take:
+
+- `timeout_seconds` — hard ceiling. When set, doit kills the entire
+  process group on expiry (exit code `137`, SIGKILL). Use this for
+  any command that *could* hang (network requests, watchers,
+  servers in foreground).
+- `expected_duration_seconds` — soft estimate, recorded in the audit
+  log alongside the actual duration. Does not affect execution, but
+  future L1/L2 rules may flag mismatches.
+
+```json
+{"command": "curl https://slow.example.com/data", "timeout_seconds": 30}
+{"command": "make test", "expected_duration_seconds": 15}
+{"command": "npm install", "timeout_seconds": 180, "expected_duration_seconds": 60}
+```
+
+Zero or omitted means no timeout / no estimate. Timeouts propagate to
+the entire process group, so `bash foo.sh` is killed along with any
+children the script spawned.
+
 ## Safety tiers
 
 Each capability has a safety tier: read, build, write, or dangerous.
