@@ -129,7 +129,8 @@ type Engine struct {
 	promoteCh  chan struct{}
 	projectCtx *doitctx.ProjectContext // discovered project context (may be nil)
 
-	scriptStore *script.Store
+	scriptStore   *script.Store
+	durationStore *policy.DurationStore
 
 	l1Mu      sync.RWMutex
 	l2Mu      sync.RWMutex
@@ -186,12 +187,13 @@ func New(opts Options, engineOpts ...EngineOption) (*Engine, error) {
 	}
 
 	e := &Engine{
-		cfg:         cfg,
-		reg:         reg,
-		logger:      logger,
-		storePath:   cfg.Policy.Level2Path,
-		promoteCh:   make(chan struct{}, 1),
-		scriptStore: script.NewStore(""),
+		cfg:           cfg,
+		reg:           reg,
+		logger:        logger,
+		storePath:     cfg.Policy.Level2Path,
+		promoteCh:     make(chan struct{}, 1),
+		scriptStore:   script.NewStore(""),
+		durationStore: policy.NewDurationStore(""),
 	}
 
 	// Discover project context from project root (best-effort; non-fatal).
@@ -950,6 +952,34 @@ func (e *Engine) ScriptApprovalStorePath() string {
 	return e.scriptStore.Path()
 }
 
+// DurationStorePath returns the file path backing the learned
+// per-pattern duration statistics.
+func (e *Engine) DurationStorePath() string {
+	return e.durationStore.Path()
+}
+
+// LearnDurations refreshes the learned-duration store from the audit
+// log synchronously. Returns the number of patterns recorded. Useful
+// for tests and admin triggers; background refresh also fires
+// automatically alongside auto-promotion.
+func (e *Engine) LearnDurations() (int, error) {
+	if e.logger == nil {
+		return 0, nil
+	}
+	entries, err := audit.Tail(e.logger.Path(), durationLearnWindow)
+	if err != nil {
+		return 0, err
+	}
+	stats := policy.AggregateDurations(entries)
+	if len(stats) == 0 {
+		return 0, nil
+	}
+	if err := e.durationStore.Replace(stats); err != nil {
+		return 0, err
+	}
+	return len(stats), nil
+}
+
 // ApproveScript records a user approval for a script content hash. The
 // pathHint is stored for display/audit context only — identity is by
 // hash alone. Writes an audit entry marking the approval.
@@ -1479,6 +1509,19 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 		e.l2Mu.RUnlock()
 	}
 
+	// Duration anomaly sanity check (L2-scope) — fires when the request
+	// carries a time expectation that deviates sharply from learned
+	// history for this cap+subcmd. Skipped under --retry (mirrors L2's
+	// own --retry bypass). Runs only when the command would otherwise
+	// be allowed or escalated (never overrides a hard deny).
+	if !policyReq.Retry && result.Decision != policy.Deny && e.durationStore != nil && (policyReq.ExpectedDurationSeconds > 0 || policyReq.TimeoutSeconds > 0) {
+		if stats, err := e.durationStore.LookupForCommand(policyReq.Command); err == nil && stats != nil {
+			if anomaly := policy.CheckDurationAnomaly(policyReq, stats); anomaly != nil {
+				result = anomaly
+			}
+		}
+	}
+
 	// L3: LLM evaluation via `claude -p`. Synchronous — L3 is always
 	// available the moment the engine finishes construction, so
 	// there is no readiness check here.
@@ -1652,7 +1695,38 @@ func (e *Engine) tryPromote() {
 		log.Printf("doit: auto-promote: added %d new learned policy entries", added)
 		e.reloadL2()
 	}
+
+	// Piggy-back duration learning on the same background firing.
+	// Cheap enough (single audit tail + aggregate) to co-locate.
+	e.tryLearnDurations()
 }
+
+// tryLearnDurations aggregates per-pattern duration statistics from the
+// audit log and persists them to the duration store. Invoked on the
+// same schedule as tryPromote (best-effort, fire-and-forget); failures
+// are logged but do not surface to the caller.
+func (e *Engine) tryLearnDurations() {
+	if e.logger == nil || e.durationStore == nil {
+		return
+	}
+	entries, err := audit.Tail(e.logger.Path(), durationLearnWindow)
+	if err != nil {
+		log.Printf("doit: learn-durations: tail audit log: %v", err)
+		return
+	}
+	stats := policy.AggregateDurations(entries)
+	if len(stats) == 0 {
+		return
+	}
+	if err := e.durationStore.Replace(stats); err != nil {
+		log.Printf("doit: learn-durations: save: %v", err)
+	}
+}
+
+// durationLearnWindow bounds how many recent audit entries we rescan
+// to rebuild the learned duration distributions. Large enough for
+// meaningful percentile estimates, small enough to stay cheap.
+const durationLearnWindow = 5000
 
 func (e *Engine) reloadL2() {
 	entries, err := policy.LoadStore(e.storePath)

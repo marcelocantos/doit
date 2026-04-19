@@ -121,6 +121,18 @@ func Register(srv *server.MCPServer, eng *engine.Engine) {
 		handlePolicyDelete(eng),
 	)
 
+	// Learned duration statistics.
+	srv.AddTool(
+		mcp.NewTool("doit_durations_list",
+			mcp.WithDescription("List learned per-pattern duration statistics "+
+				"(cap, subcmd, sample count, p50/p95 in milliseconds, last updated). "+
+				"The store is populated as a by-product of successful executions; "+
+				"doit uses it to flag requests whose timeout_seconds or "+
+				"expected_duration_seconds deviates sharply from history."),
+		),
+		handleDurationsList(eng),
+	)
+
 	// Script-content-hash approval management.
 	srv.AddTool(
 		mcp.NewTool("doit_approvals_list",
@@ -605,6 +617,20 @@ func handlePolicyDelete(eng *engine.Engine) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(fmt.Sprintf("Delete failed: %v", err)), nil
 		}
 		return mcp.NewToolResultText(fmt.Sprintf("Deleted policy entry %q.", id)), nil
+	}
+}
+
+func handleDurationsList(eng *engine.Engine) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		stats, err := policy.NewDurationStore(eng.DurationStorePath()).Load()
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to load duration stats: %v", err)), nil
+		}
+		if len(stats) == 0 {
+			return mcp.NewToolResultText("No learned duration statistics."), nil
+		}
+		data, _ := json.MarshalIndent(stats, "", "  ")
+		return mcp.NewToolResultText(string(data)), nil
 	}
 }
 

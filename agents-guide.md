@@ -60,6 +60,7 @@ interface for command execution.
 | `doit_list_capabilities` | List registered capabilities and their tiers |
 | `doit_approvals_list` | List approved shell-script content hashes |
 | `doit_approvals_revoke` | Revoke a script-content-hash approval |
+| `doit_durations_list` | List learned per-pattern duration statistics |
 
 ### Audit log
 
@@ -134,6 +135,23 @@ rules may opt in to expectation-aware logic by declaring a third
 `meta` parameter on their `check` function; `meta` is a dict carrying
 `timeout_seconds`, `expected_duration_seconds`, `justification`, and
 `safety_arg`.
+
+doit also learns per-pattern durations from the audit log as a side
+effect of successful executions. The aggregator groups by capability
+and subcommand (e.g. `git status`, `make test`) and records p50 and
+p95 in milliseconds, persisted at
+`~/.config/doit/duration-stats.yaml`. Two L2-scope rules use this
+store:
+
+- `duration-anomaly` (bypassable) — fires when
+  `expected_duration_seconds` is below p50/5 or above p95×5 for a
+  pattern with ≥5 successful samples. Catches agents that wildly
+  mis-estimate.
+- `timeout-too-short` (bypassable) — fires when `timeout_seconds` is
+  below p50, i.e. the agent would kill a normal run before it finished.
+
+Both are skipped under `--retry`. Use `doit_durations_list` to inspect
+the learned distributions.
 
 ## Safety tiers
 

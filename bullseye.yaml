@@ -417,7 +417,7 @@ targets:
     achieved: 2026-04-13
   T26:
     name: Commands carry time expectations that inform static analysis and runtime management
-    status: identified
+    status: achieved
     value: 5.0
     cost: 8.0
     acceptance:
@@ -433,6 +433,7 @@ targets:
     - T26.3
     origin: user idea, session 2026-04-13
     discovered: 2026-04-13
+    achieved: 2026-04-19
   T26.1:
     name: MCP execute request accepts time expectations; runtime enforces timeout
     status: achieved
@@ -468,7 +469,7 @@ targets:
     achieved: 2026-04-19
   T26.3:
     name: L2 learns per-pattern durations and can flag anomalies
-    status: identified
+    status: achieved
     value: 3.0
     cost: 5.0
     observable: true
@@ -482,6 +483,7 @@ targets:
     - T26.1
     origin: decomposition of 🎯T26
     discovered: 2026-04-19
+    achieved: 2026-04-19
   T27:
     name: Shell script execution is gated by content-hash approval
     status: achieved
