@@ -5,7 +5,7 @@ breaking changes to the public API, MCP interface, configuration format,
 audit log format, or Starlark rule contract will require a major version
 bump. The pre-1.0 period exists to get these right.
 
-Snapshot as of v0.5.0 (policy.Request.Segments removed in 🎯T17, post-v0.5.0).
+Snapshot as of v0.6.0.
 
 ## Interaction surface catalogue
 
@@ -15,8 +15,8 @@ Snapshot as of v0.5.0 (policy.Request.Segments removed in 🎯T17, post-v0.5.0).
 
 | Tool | Parameters | Stability |
 |---|---|---|
-| `doit_execute` | command, justification, safety_arg, cwd, approved | Stable |
-| `doit_dry_run` | command, justification, safety_arg, cwd | Stable |
+| `doit_execute` | command, justification, safety_arg, cwd, approved, timeout_seconds, expected_duration_seconds | Stable |
+| `doit_dry_run` | command, justification, safety_arg, cwd, timeout_seconds, expected_duration_seconds | Stable |
 | `doit_approve` | token, command | Stable |
 
 **Work sessions**
@@ -37,6 +37,9 @@ Snapshot as of v0.5.0 (policy.Request.Segments removed in 🎯T17, post-v0.5.0).
 | `doit_policy_review` | (none) | Needs review |
 | `doit_self_audit` | (none) | Needs review |
 | `doit_list_capabilities` | tier (optional) | Stable |
+| `doit_approvals_list` | (none) | Needs review |
+| `doit_approvals_revoke` | hash (required) | Needs review |
+| `doit_durations_list` | (none) | Needs review |
 
 **Audit log**
 
@@ -63,10 +66,17 @@ Snapshot as of v0.5.0 (policy.Request.Segments removed in 🎯T17, post-v0.5.0).
 | `Engine.Evaluate(ctx, req)` | `EvalResult` | Stable |
 | `Engine.ExecuteStreaming(ctx, req, stdout, stderr)` | `Result` | Stable |
 | `Engine.PolicyStatus()` | `map[string]any` | Stable |
-| `Request` struct | Command, Args, Justification, SafetyArg, Cwd, Env, Approved, Retry | Stable |
-| `policy.Request` struct | Command, Cwd, Retry, Justification, SafetyArg, ProjectType | Stable — `Segments` field removed post-v0.5.0 (🎯T17) |
+| `Request` struct | Command, Args, Justification, SafetyArg, Cwd, Env, Approved, Retry, TimeoutSeconds, ExpectedDurationSeconds | Stable |
+| `policy.Request` struct | Command, Cwd, Retry, Justification, SafetyArg, ProjectType, TimeoutSeconds, ExpectedDurationSeconds | Stable |
 | `Result` struct | ExitCode, Stdout, Stderr, PolicyLevel, PolicyDecision, PolicyReason, PolicyRuleID, EscalateToken | Stable |
-| `EvalResult` struct | Decision, Level, Reason, RuleID, Bypassable | Stable |
+| `EvalResult` struct | Decision, Level, Reason, RuleID, Bypassable, ScriptApproval | Stable |
+| `ScriptApprovalRequest` struct | Interpreter, Path, ContentHash, ContentPreview, SizeBytes | Needs review |
+| `Engine.ApproveScript(hash, pathHint, justification)` | `(*script.Approval, error)` | Needs review |
+| `Engine.RevokeScriptApproval(hash)` | `error` | Needs review |
+| `Engine.ListScriptApprovals()` | `([]script.Approval, error)` | Needs review |
+| `Engine.ScriptApprovalStorePath()` | `string` | Needs review |
+| `Engine.DurationStorePath()` | `string` | Needs review |
+| `Engine.LearnDurations()` | `(int, error)` | Needs review |
 | `Engine.ListCapabilities()` | `[]CapabilityInfo` | Stable |
 | `Engine.AuditPath()` | `string` | Stable |
 | `Engine.RecordDecision(command, decision)` | `error` | Fluid |
@@ -84,6 +94,7 @@ Snapshot as of v0.5.0 (policy.Request.Segments removed in 🎯T17, post-v0.5.0).
 |---|---|---|---|
 | Phase 1 (decision) | Policy escalation or bypassable deny | Allow once, Allow always, Deny, Deny always | Stable |
 | Phase 2 (promotion) | "Always" choice in Phase 1 | Starlark rules at narrow/moderate/broad generality, or decline | Fluid |
+| Script approval | Unapproved shell-script invocation detected | approve, deny | Needs review |
 
 ### CLI flags (MCP server binary)
 
@@ -129,11 +140,15 @@ Snapshot as of v0.5.0 (policy.Request.Segments removed in 🎯T17, post-v0.5.0).
 | `rule_id` | string | yes | Stable |
 | `description` | string | no | Stable |
 | `bypassable` | bool | no (default false) | Stable |
-| `check` | function(command, args) → dict or None | yes | Stable |
+| `check` | function(command, args[, meta]) → dict or None | yes | Stable |
 | `tests` | list of test dicts | yes | Stable |
 
 Check return dict: `{"decision": "allow"\|"deny"\|"escalate", "reason": "..."}`.
-Test dict: `{"command": "...", "args": [...], "expect": "allow"\|"deny"\|"escalate"}`.
+Test dict: `{"command": "...", "args": [...], "expect": "allow"\|"deny"\|"escalate"[, "meta": {...}]}`.
+
+`check` may declare two or three parameters. The 3-param form opts in
+to a `meta` dict carrying `timeout_seconds`, `expected_duration_seconds`,
+`justification`, and `safety_arg`. 2-param rules are unaffected.
 
 ### Three-level policy engine
 
@@ -168,6 +183,10 @@ collapses the cascade to a single-tier.
 | Policy rule ID | `policy_rule_id` | string (omitempty) | Stable |
 | Justification | `justification` | string (omitempty) | Stable |
 | Safety argument | `safety_arg` | string (omitempty) | Stable |
+| Script content hash | `script_hash` | string (omitempty) | Needs review |
+| Script path | `script_path` | string (omitempty) | Needs review |
+| Expected duration | `expected_duration_ms` | float64 (omitempty) | Needs review |
+| Timed out | `timed_out` | bool (omitempty) | Needs review |
 | Entry hash | `hash` | string (hex SHA-256) | Stable |
 
 The `pipeline` field retains its name for backwards compatibility with
@@ -179,10 +198,10 @@ the first token of the command, for coarse filtering during audit queries
 (`Filter.Cap`). They are not a semantic decomposition of the command and
 do not reflect what the shell actually runs.
 
-These fields are deprecated as of 🎯T17 (post-v0.5.0). New writes populate
-them for backwards compatibility with log readers that use `Filter.Cap`, but
-they carry no policy semantics — the engine treats the full command string as
-opaque. A future major release will remove them.
+These fields are deprecated as of 🎯T17 (released in v0.6.0). New writes
+populate them for backwards compatibility with log readers that use
+`Filter.Cap`, but they carry no policy semantics — the engine treats the full
+command string as opaque. A future major release will remove them.
 
 Genesis hash: SHA-256 of `"doit-genesis"`.
 
@@ -233,6 +252,35 @@ Genesis hash: SHA-256 of `"doit-genesis"`.
 | Force push | git push | `--force`, `-f`, `--force-with-lease` | Stable |
 | Hard reset | git reset | `--hard` | Stable |
 | Checkout all | git checkout | `.` (with or without `--`) | Stable |
+| Duration mismatch | (built-in) | `sleep N` where N > 2× `expected_duration_seconds` | Needs review |
+
+### L2-scope duration rules (bypassable with --retry)
+
+| Rule ID | Condition | Stability |
+|---|---|---|
+| `duration-anomaly` | `expected_duration_seconds` below p50/5 or above p95×5 for a pattern with ≥5 samples | Needs review |
+| `timeout-too-short` | `timeout_seconds` below learned p50 for the pattern | Needs review |
+
+### Script-hash approval gate (tier-0 pre-policy)
+
+| Surface | Notes | Stability |
+|---|---|---|
+| Detection scope | `bash\|sh\|zsh <path>`, `./path` with shell shebang; pipelines and compound commands fall through | Needs review |
+| Hash | SHA-256 over full file contents, prefixed `sha256:` | Stable |
+| Storage | `~/.config/doit/script-approvals.yaml` (per-user) | Needs review |
+| Trust model | Blanket content-trust; bypasses L1/L2/L3 for the outer invocation; inner commands run under `sh -c` unmediated | Needs review |
+| Audit rule IDs | `script-hash-approved`, `script-hash-matched`, `script-hash-pending`, `script-hash-revoked`, `script-hash-error` | Needs review |
+
+### Learned duration statistics
+
+| Surface | Notes | Stability |
+|---|---|---|
+| Storage | `~/.config/doit/duration-stats.yaml` (per-user) | Needs review |
+| Aggregator | `policy.AggregateDurations(entries)` — successful non-timed-out runs only | Needs review |
+| Distribution | p50 and p95 (linear interpolation) in milliseconds | Needs review |
+| Keying | `(cap, subcmd)` from audit segments (fallback: first two words of Pipeline) | Needs review |
+| Anomaly thresholds | factor = 5× (expected below p50/5 or above p95×5); min samples = 5 | Needs review |
+| Refresh trigger | Background piggy-back on `tryPromote`; explicit `Engine.LearnDurations()` | Needs review |
 
 ### Exit code conventions
 
@@ -263,6 +311,20 @@ Genesis hash: SHA-256 of `"doit-genesis"`.
   staleness, and duplicates with fixed thresholds (90-day stale window,
   equality-based contradiction check). These thresholds will need
   validation and likely become configurable.
+- **Script-hash detection scope**: The tier-0 gate fires only for
+  `bash|sh|zsh <path>` and `./<path>` with a shell shebang — pipelines,
+  `bash -c "…"`, and non-shell interpreters (python, node) fall through.
+  Before 1.0, decide whether to broaden the scope (shared mechanism for
+  other interpreters) or keep it narrow-and-documented as the contract.
+- **Anomaly-rule calibration**: The duration-anomaly / timeout-too-short
+  factor (5×) and minimum-sample threshold (5) are hardcoded heuristics.
+  Needs real-world calibration before 1.0 — thresholds likely become
+  configurable, and the "clip and warn" semantics may want refinement
+  (e.g. separate thresholds for under vs. over estimate).
+- **Duration store schema stability**: The YAML shape under
+  `~/.config/doit/duration-stats.yaml` is marked Needs review.
+  `Replace`-style full rewrites on each learn cycle work for small
+  history but may evolve to incremental updates and/or a decay function.
 
 ## Out of scope for 1.0
 

@@ -85,3 +85,31 @@ maintenance activities. Append-only — newest entries at the bottom.
   STABILITY.md snapshot to v0.5.0 with the full 16-tool surface,
   CLAUDE.md architecture map updated, README/agents-guide tool tables
   completed.
+
+## 2026-04-19 — /release v0.6.0
+
+- **Commit**: `pending`
+- **Outcome**: Released v0.6.0 (darwin-arm64, linux-amd64, linux-arm64).
+  Three new capability groups landed this release:
+  - **Shell-script content-hash approval** (🎯T27): tier-0 gate before
+    L1/L2/L3 that elicits user approval on first encounter with a shell
+    script, keyed by SHA-256 of the content. Approvals persist at
+    `~/.config/doit/script-approvals.yaml`. Modifying the script forces
+    re-approval. New MCP tools: `doit_approvals_list`,
+    `doit_approvals_revoke`. New audit fields: `script_hash`, `script_path`.
+  - **Time expectations + timeout enforcement** (🎯T26.1): `timeout_seconds`
+    and `expected_duration_seconds` on `doit_execute` / `doit_dry_run`.
+    Runtime kills the whole process group on expiry (SIGKILL, exit 137).
+    Audit entries record expected vs actual and a `timed_out` flag.
+  - **L1/L2 duration-aware rules** (🎯T26.2, 🎯T26.3): Starlark `check`
+    can opt into a 3rd `meta` param for the expectations; built-in L1
+    rule `flag-duration-mismatch` flags `sleep N` where N > 2×expected;
+    L2 learns per-pattern p50/p95 from the audit log (persisted at
+    `~/.config/doit/duration-stats.yaml`) and flags `duration-anomaly`
+    / `timeout-too-short` mismatches against the learned distribution.
+    New MCP tool: `doit_durations_list`.
+  STABILITY.md snapshot refreshed to v0.6.0; README documents the new
+  MCP tools and features.
+- **Deferred**:
+  - `--help-agent` CLI flag is still missing on the doit binary
+    (pre-existing gap; not blocking, captured for a future release).
