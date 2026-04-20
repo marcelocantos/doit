@@ -514,7 +514,7 @@ targets:
     achieved: 2026-04-19
   T28:
     name: doit binary exposes --help-agent for agent guide emission
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     observable: true
@@ -527,6 +527,7 @@ targets:
     context: 'The /release skill''s CLI flag audit flags `--help-agent` as missing on doit. The v0.6.0 audit-log entry lists this as a deferred gap. Every other marcelocantos CLI binary exposes --help-agent so coding agents can pull the CLI reference + domain guide in one call. Implementation sketch: `go:embed` agents-guide.md in cmd/doit, capture flag.PrintDefaults() into a buffer, print buffer+embedded guide on --help-agent. Main.go currently rolls its own flag parsing (not stdlib flag) so the implementation may want to keep that style or switch to `flag` to inherit PrintDefaults for free.'
     origin: manual
     discovered: 2026-04-19
+    achieved: 2026-04-20
   T3:
     name: Starlark L1 rules
     status: achieved
