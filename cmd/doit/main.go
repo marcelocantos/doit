@@ -16,11 +16,23 @@ import (
 
 	"github.com/mark3labs/mcp-go/server"
 
+	"github.com/marcelocantos/doit"
 	"github.com/marcelocantos/doit/engine"
 	"github.com/marcelocantos/doit/mcptools"
 )
 
 var version = "dev"
+
+const usageText = `Usage: doit [--config <path>] [--version] [--help] [--help-agent]
+
+MCP server for doit's policy engine (stdio transport).
+
+Flags:
+  --config <path>   Load config from a specific file (default: ~/.config/doit/config.yaml)
+  --version         Print version and exit
+  --help            Print this help and exit
+  --help-agent      Print help plus the embedded agent guide and exit
+`
 
 func main() {
 	os.Exit(run())
@@ -42,8 +54,16 @@ func run() int {
 			fmt.Printf("doit %s\n", version)
 			return 0
 		case "--help":
-			fmt.Fprintf(os.Stderr, "Usage: doit [--config <path>] [--version] [--help]\n\n")
-			fmt.Fprintf(os.Stderr, "MCP server for doit's policy engine (stdio transport).\n")
+			fmt.Fprint(os.Stderr, usageText)
+			return 0
+		case "--help-agent":
+			// Agent-friendly help: CLI reference first, then the full
+			// embedded agent guide so a single invocation gives an
+			// agent everything it needs to use doit. Written to stdout
+			// (not stderr) so agents can capture it with a plain redirect.
+			fmt.Print(usageText)
+			fmt.Println()
+			fmt.Print(doit.AgentsGuide)
 			return 0
 		default:
 			fmt.Fprintf(os.Stderr, "doit: unknown flag %q\n", args[i])

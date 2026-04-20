@@ -102,6 +102,7 @@ Snapshot as of v0.6.0.
 |---|---|
 | `--version` | Stable |
 | `--help` | Stable |
+| `--help-agent` | Stable |
 | `--config <path>` | Stable |
 
 ### Configuration schema (`~/.config/doit/config.yaml`)

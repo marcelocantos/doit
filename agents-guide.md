@@ -1,5 +1,8 @@
 # doit — Agent Usage Guide
 
+*You can also view this guide at any time by running `doit --help-agent`,
+which prints the CLI reference followed by this document.*
+
 ## Security model — doit is the sole execution path
 
 **Never use Bash directly. All commands must go through `doit_execute`.**

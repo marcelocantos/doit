@@ -288,7 +288,10 @@ Once configured, use `doit_check_config` to verify that:
 ## Agent integration
 
 If you use an agentic coding tool (Claude Code, Cursor, Copilot, etc.), see
-[`agents-guide.md`](agents-guide.md) for a concise MCP tool reference.
+[`agents-guide.md`](agents-guide.md) for a concise MCP tool reference. The
+binary also prints the guide alongside its CLI reference via `doit
+--help-agent` — useful when an agent can run the binary but hasn't cloned the
+repo.
 
 ## License
 
