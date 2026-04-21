@@ -113,3 +113,16 @@ maintenance activities. Append-only — newest entries at the bottom.
 - **Deferred**:
   - `--help-agent` CLI flag is still missing on the doit binary
     (pre-existing gap; not blocking, captured for a future release).
+
+## 2026-04-21 — /release v0.7.0
+
+- **Commit**: `pending`
+- **Outcome**: Released v0.7.0 (darwin-arm64, linux-amd64, linux-arm64).
+  Single-feature release — closes the pre-existing `--help-agent` gap
+  noted in the v0.6.0 deferred list (🎯T28). The `doit` binary now prints
+  the CLI reference followed by the full embedded `agents-guide.md` when
+  invoked with `--help-agent`. Embedding uses `go:embed` from a new
+  top-level `doit` package at the module root — a workaround for
+  `go:embed`'s no-parent-directories rule that avoids a pre-build copy
+  step. STABILITY.md snapshot bumped to v0.7.0 (the `--help-agent`
+  catalogue entry itself landed in PR #25 under v0.6.0 in-flight).
