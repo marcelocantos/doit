@@ -116,7 +116,7 @@ maintenance activities. Append-only — newest entries at the bottom.
 
 ## 2026-04-21 — /release v0.7.0
 
-- **Commit**: `pending`
+- **Commit**: `2e933f2`
 - **Outcome**: Released v0.7.0 (darwin-arm64, linux-amd64, linux-arm64).
   Single-feature release — closes the pre-existing `--help-agent` gap
   noted in the v0.6.0 deferred list (🎯T28). The `doit` binary now prints
