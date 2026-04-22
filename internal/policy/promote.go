@@ -29,6 +29,7 @@ type PromoteOptions struct {
 }
 
 // groupKey identifies a semantic group of commands by capability and subcommand.
+// Used for policy promotion analysis, which is project-independent.
 type groupKey struct {
 	cap    string
 	subcmd string

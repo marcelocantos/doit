@@ -129,6 +129,8 @@ type Engine struct {
 	promoteCh  chan struct{}
 	projectCtx *doitctx.ProjectContext // discovered project context (may be nil)
 
+	projectRoot   string // normalised project root path (empty = no project context)
+
 	scriptStore   *script.Store
 	durationStore *policy.DurationStore
 
@@ -199,6 +201,13 @@ func New(opts Options, engineOpts ...EngineOption) (*Engine, error) {
 	// Discover project context from project root (best-effort; non-fatal).
 	if opts.ProjectRoot != "" {
 		e.projectCtx = doitctx.Discover(opts.ProjectRoot)
+		// Normalise the path so audit entries and duration keys are stable
+		// across relative vs. absolute invocations.
+		if abs, err := filepath.Abs(opts.ProjectRoot); err == nil {
+			e.projectRoot = abs
+		} else {
+			e.projectRoot = opts.ProjectRoot
+		}
 	}
 
 
@@ -667,6 +676,7 @@ func (e *Engine) runScriptCommand(ctx context.Context, req Request, sg scriptGat
 			ScriptHash:    sg.Hash,
 			ScriptPath:    sg.Invocation.ResolvedPath,
 			TimedOut:      timedOut,
+			ProjectRoot:   e.projectRoot,
 		}
 		if req.ExpectedDurationSeconds > 0 {
 			opts.ExpectedDuration = float64(req.ExpectedDurationSeconds) * 1000.0
@@ -1511,11 +1521,11 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 
 	// Duration anomaly sanity check (L2-scope) — fires when the request
 	// carries a time expectation that deviates sharply from learned
-	// history for this cap+subcmd. Skipped under --retry (mirrors L2's
-	// own --retry bypass). Runs only when the command would otherwise
+	// history for this cap+subcmd+project. Skipped under --retry (mirrors
+	// L2's own --retry bypass). Runs only when the command would otherwise
 	// be allowed or escalated (never overrides a hard deny).
 	if !policyReq.Retry && result.Decision != policy.Deny && e.durationStore != nil && (policyReq.ExpectedDurationSeconds > 0 || policyReq.TimeoutSeconds > 0) {
-		if stats, err := e.durationStore.LookupForCommand(policyReq.Command); err == nil && stats != nil {
+		if stats, err := e.durationStore.LookupForCommand(policyReq.Command, e.projectRoot); err == nil && stats != nil {
 			if anomaly := policy.CheckDurationAnomaly(policyReq, stats); anomaly != nil {
 				result = anomaly
 			}
@@ -1636,6 +1646,7 @@ func (e *Engine) logExecution(ctx context.Context, cmdStr string, segments, tier
 		opts.ExpectedDuration = float64(req.ExpectedDurationSeconds) * 1000.0
 	}
 	opts.TimedOut = timedOut
+	opts.ProjectRoot = e.projectRoot
 	_ = e.logger.Log(cmdStr, segments, tiers, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
 }
 

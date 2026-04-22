@@ -19,15 +19,27 @@ import (
 )
 
 // DurationStats captures the observed-duration distribution for a
-// command pattern identified by (Cap, Subcmd). Values are in
+// command pattern identified by (Cap, Subcmd, ProjectID). Values are in
 // milliseconds, mirroring the audit entry's duration_ms field.
+//
+// ProjectID is the normalised absolute project root path. An empty
+// ProjectID represents the shared bucket for commands run outside any
+// discovered project context.
 type DurationStats struct {
 	Cap         string    `yaml:"cap"`
 	Subcmd      string    `yaml:"subcmd,omitempty"`
+	ProjectID   string    `yaml:"project_id,omitempty"`
 	SampleCount int       `yaml:"sample_count"`
 	P50Ms       float64   `yaml:"p50_ms"`
 	P95Ms       float64   `yaml:"p95_ms"`
 	LastUpdated time.Time `yaml:"last_updated"`
+}
+
+// durationKey identifies a per-project duration bucket.
+type durationKey struct {
+	cap       string
+	subcmd    string
+	projectID string
 }
 
 // minSamplesForAnomaly is the minimum observation count before a
@@ -43,12 +55,14 @@ const anomalyFactor = 5.0
 // entries contribute — timeouts and failures produce atypical durations
 // that would skew the learned distribution.
 //
-// Grouping mirrors AnalyseL3Decisions: (Cap, Subcmd) extracted from the
-// entry's Segments and Pipeline. Entries without a recognisable cap
+// Grouping is (Cap, Subcmd, ProjectID). ProjectID comes from the
+// entry's ProjectRoot field (the normalised absolute project root path
+// recorded at execution time). Entries without a ProjectRoot fall into
+// a shared bucket (empty ProjectID). Entries without a recognisable cap
 // are skipped.
 func AggregateDurations(entries []audit.Entry) []DurationStats {
-	samples := make(map[groupKey][]float64)
-	latest := make(map[groupKey]time.Time)
+	samples := make(map[durationKey][]float64)
+	latest := make(map[durationKey]time.Time)
 
 	for _, e := range entries {
 		// Only successful, non-timed-out runs contribute to the
@@ -62,7 +76,7 @@ func AggregateDurations(entries []audit.Entry) []DurationStats {
 		if e.Duration <= 0 {
 			continue
 		}
-		key := keyForEntry(e)
+		key := durationKeyForEntry(e)
 		if key.cap == "" {
 			continue
 		}
@@ -81,6 +95,7 @@ func AggregateDurations(entries []audit.Entry) []DurationStats {
 		stats = append(stats, DurationStats{
 			Cap:         key.cap,
 			Subcmd:      key.subcmd,
+			ProjectID:   key.projectID,
 			SampleCount: len(ms),
 			P50Ms:       percentile(ms, 0.50),
 			P95Ms:       percentile(ms, 0.95),
@@ -91,25 +106,32 @@ func AggregateDurations(entries []audit.Entry) []DurationStats {
 		if stats[i].Cap != stats[j].Cap {
 			return stats[i].Cap < stats[j].Cap
 		}
-		return stats[i].Subcmd < stats[j].Subcmd
+		if stats[i].Subcmd != stats[j].Subcmd {
+			return stats[i].Subcmd < stats[j].Subcmd
+		}
+		return stats[i].ProjectID < stats[j].ProjectID
 	})
 	return stats
 }
 
-// keyForEntry extracts the (cap, subcmd) key from an audit entry,
-// preferring the structured Segments field but falling back to parsing
-// the raw Pipeline string. Returns an empty key when no cap name can
-// be recovered (e.g. placeholder entries like "<script-approval>").
-func keyForEntry(e audit.Entry) groupKey {
+// durationKeyForEntry extracts the (cap, subcmd, projectID) key from an
+// audit entry, preferring the structured Segments field but falling back
+// to parsing the raw Pipeline string. Returns an empty key when no cap
+// name can be recovered (e.g. placeholder entries like "<script-approval>").
+// projectID comes from the entry's ProjectRoot field.
+func durationKeyForEntry(e audit.Entry) durationKey {
+	var capName, subcmd string
 	if len(e.Segments) > 0 && e.Segments[0] != "" {
 		info := parseEntryInfo(e)
-		return info.key
+		capName = info.key.cap
+		subcmd = info.key.subcmd
+	} else {
+		capName, subcmd = extractCapSubcmd(e.Pipeline)
 	}
-	cap, subcmd := extractCapSubcmd(e.Pipeline)
-	if cap == "" || strings.HasPrefix(cap, "<") {
-		return groupKey{}
+	if capName == "" || strings.HasPrefix(capName, "<") {
+		return durationKey{}
 	}
-	return groupKey{cap: cap, subcmd: subcmd}
+	return durationKey{cap: capName, subcmd: subcmd, projectID: e.ProjectRoot}
 }
 
 // percentile computes the requested percentile of a pre-sorted
@@ -296,12 +318,13 @@ func (s *DurationStore) saveLocked(stats []DurationStats) error {
 	return nil
 }
 
-// Lookup returns the stats for a given cap+subcmd, or nil when there
-// is no entry. Uses the cached copy if already loaded.
-func (s *DurationStore) Lookup(cap, subcmd string) (*DurationStats, error) {
+// Lookup returns the stats for a given (cap, subcmd, projectID), or nil
+// when there is no entry. An empty projectID matches the shared bucket
+// for commands without project context. Uses the cached copy if already loaded.
+func (s *DurationStore) Lookup(capName, subcmd, projectID string) (*DurationStats, error) {
 	s.mu.RLock()
 	if s.loaded {
-		result := findStats(s.cached, cap, subcmd)
+		result := findStats(s.cached, capName, subcmd, projectID)
 		s.mu.RUnlock()
 		return result, nil
 	}
@@ -314,12 +337,12 @@ func (s *DurationStore) Lookup(cap, subcmd string) (*DurationStats, error) {
 			return nil, err
 		}
 	}
-	return findStats(s.cached, cap, subcmd), nil
+	return findStats(s.cached, capName, subcmd, projectID), nil
 }
 
-func findStats(all []DurationStats, cap, subcmd string) *DurationStats {
+func findStats(all []DurationStats, capName, subcmd, projectID string) *DurationStats {
 	for i := range all {
-		if all[i].Cap == cap && all[i].Subcmd == subcmd {
+		if all[i].Cap == capName && all[i].Subcmd == subcmd && all[i].ProjectID == projectID {
 			result := all[i]
 			return &result
 		}
@@ -328,13 +351,14 @@ func findStats(all []DurationStats, cap, subcmd string) *DurationStats {
 }
 
 // LookupForCommand parses the leading cap/subcmd out of a command
-// string and returns any stats keyed by them. Convenience wrapper.
-func (s *DurationStore) LookupForCommand(command string) (*DurationStats, error) {
-	cap, subcmd := extractCapSubcmd(command)
-	if cap == "" {
+// string and returns any stats keyed by them for the given projectID.
+// Convenience wrapper.
+func (s *DurationStore) LookupForCommand(command, projectID string) (*DurationStats, error) {
+	capName, subcmd := extractCapSubcmd(command)
+	if capName == "" {
 		return nil, nil
 	}
-	return s.Lookup(cap, subcmd)
+	return s.Lookup(capName, subcmd, projectID)
 }
 
 // extractCapSubcmd mirrors parseEntryInfo's notion of cap/subcmd but
