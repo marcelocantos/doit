@@ -528,6 +528,21 @@ targets:
     origin: manual
     discovered: 2026-04-19
     achieved: 2026-04-20
+  T29:
+    name: Learned durations are keyed per-project, not globally
+    status: identified
+    value: 0.0
+    cost: 0.0
+    observable: true
+    acceptance:
+    - Duration groupKey extends to (cap, subcmd, project_id) — a small repo and a monorepo don't pool their `make test` percentiles
+    - project_id derives from the existing projectCtx (e.g. repo root path or a stable hash of it); null project context falls back to a shared bucket
+    - Audit entries gain (or already carry) enough context for the aggregator to reconstruct project_id without guessing
+    - CheckDurationAnomaly and the learner honour the new key — tests cover cross-project isolation (same cap+subcmd, different p50s, correct flagging)
+    - doit_durations_list output shows project_id per row so an operator can see which bucket a stat came from
+    context: '🎯T26.3 landed per-pattern p50/p95 but keys globally on (cap, subcmd). For commands whose runtime is dominated by project size (make test, go test ./..., pytest, webpack), this pools wildly different distributions together and produces anomaly false-positives in both directions — a tiny repo''s expected=2s gets flagged against a monorepo''s p95, and a monorepo''s expected=120s gets flagged against a tiny repo''s p50. The engine already has `projectCtx` from 🎯T13 discovery; extending the aggregator key is a small change with outsized accuracy payoff. Open design question: what''s the canonical project_id? Likely the absolute path of the discovered project root, normalised. Needs a decision on how that round-trips through audit entries (currently they carry cwd, not project_root).'
+    origin: manual
+    discovered: 2026-04-22
   T3:
     name: Starlark L1 rules
     status: achieved
@@ -537,6 +552,38 @@ targets:
     - TODO
     origin: manual
     discovered: 2026-04-09
+  T30:
+    name: rm tier reflects reversibility via git-tracked status
+    status: identified
+    value: 0.0
+    cost: 0.0
+    observable: true
+    acceptance:
+    - A git-tracked file targeted by `rm` (not `rm -r`) is evaluated as write-tier, not dangerous-tier — it's recoverable via `git checkout HEAD -- <path>`
+    - An untracked file keeps its current dangerous classification — once gone, it's gone
+    - Recursive removes (`rm -r`, `rm -rf`) stay dangerous regardless of tracking (sub-tree recovery is harder and the blast radius is higher)
+    - Hardcoded catastrophic rules (deny-rm-catastrophic) still fire regardless of tier — this target refines the tier axis, not the safety-rule axis
+    - Rule explicitly inspects git state via a lightweight shell-out (`git ls-files --error-unmatch <path>` in the file's parent dir) with a sane fallback when the path isn't under a git repo at all (treat as dangerous)
+    - 'Tests cover: tracked file → write, untracked file → dangerous, recursive on tracked tree → dangerous, path outside any repo → dangerous, path under a bare/worktree-only repo → dangerous (conservative)'
+    context: 'The read/build/write/dangerous tier system conflates two separate axes: intrinsic risk and reversibility. `rm foo.go` where foo.go is tracked is effectively equivalent to `git checkout HEAD -- foo.go` being available, so the user can always recover. `rm untracked-work.txt` is truly destructive. Right now both are dangerous-tier and both get the same escalation path, which produces false-positive escalations on routine work. Reversibility is a better reflective of actual risk than the raw command name. Scope-limit: only `rm` for now — generalising to other destructive operations (truncate redirects, `git reset --hard`) is a follow-up. Design note: the check shells out per evaluation. Cheap (single exec of git ls-files), but worth measuring before assuming it''s negligible. If it dominates evaluation latency, cache per-session via the existing session mechanism.'
+    origin: manual
+    discovered: 2026-04-22
+  T32:
+    name: Threat model is written down and locked in before 1.0
+    status: identified
+    value: 0.0
+    cost: 0.0
+    observable: true
+    acceptance:
+    - 'docs/threat-model.md exists and enumerates: (a) what doit protects against, (b) what it does not protect against, (c) the assumptions the protections depend on'
+    - 'Explicitly addresses the MCP-ecosystem evolution: when other MCP servers expose their own execution-adjacent primitives (shell snippets, file writes, HTTP calls that can reach local services), doit is NOT in the loop — document this and name it as a limit'
+    - 'Explicitly addresses the `deny: [Bash]` enforcement model and what breaks it: alternative shell tools (Write+chmod+execute, SSH via MCP, other MCP servers that spawn processes, even `doit_execute` being used to shell out to another agent)'
+    - 'Names the trust boundaries: user trusts their own agent, agent delegates to doit, doit delegates to L3 evaluator, L3 evaluator is itself an LLM with prompt-injection risk'
+    - Links to `doit_check_config` and spells out what configuration state the safety model depends on
+    - Reviewed and linked from STABILITY.md under 1.0 prerequisites
+    context: 'doit''s design assumes it is the sole execution path — every command an agent runs flows through doit_execute, gets evaluated by the policy engine, and is audited. This assumption was sound when MCP ecosystems were sparse. In 2026 it''s less sound: agents routinely have many MCP servers installed, and some expose execution-adjacent primitives (shell snippets via filesystem-mcp-plus-chmod-plus-exec patterns, scripting via language-MCP servers, HTTP clients that can reach local services, etc.). doit is trivially bypassable through any of those. Users who rely on doit for safety may not realise this. Before 1.0 locks in the guarantees, write down what doit actually defends against, what it doesn''t, and what configuration assumptions the defence relies on. This is a documentation target, not a code-change target — it''s a pre-1.0 safety contract.'
+    origin: manual
+    discovered: 2026-04-22
   T4:
     name: Per-project policy
     status: achieved
