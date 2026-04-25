@@ -23,6 +23,7 @@ func (m *mockCap) Name() string                          { return m.name }
 func (m *mockCap) Description() string                   { return m.desc }
 func (m *mockCap) Tier() Tier                            { return m.tier }
 func (m *mockCap) Validate(args []string) error          { return nil }
+func (m *mockCap) RedactOutput() bool                    { return false }
 func (m *mockCap) Run(_ context.Context, _ []string, _ io.Reader, _, _ io.Writer) error {
 	return nil
 }

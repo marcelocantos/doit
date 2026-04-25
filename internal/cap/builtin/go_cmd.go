@@ -9,7 +9,7 @@ import (
 	"github.com/marcelocantos/doit/internal/cap"
 )
 
-type GoCmd struct{}
+type GoCmd struct{ Base }
 
 var _ cap.Capability = (*GoCmd)(nil)
 

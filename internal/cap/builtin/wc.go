@@ -8,7 +8,7 @@ import (
 	"github.com/marcelocantos/doit/internal/cap"
 )
 
-type Wc struct{}
+type Wc struct{ Base }
 
 var _ cap.Capability = (*Wc)(nil)
 

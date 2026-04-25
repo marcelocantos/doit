@@ -10,7 +10,7 @@ import (
 	"github.com/marcelocantos/doit/internal/cap"
 )
 
-type Make struct{}
+type Make struct{ Base }
 
 var _ cap.Capability = (*Make)(nil)
 

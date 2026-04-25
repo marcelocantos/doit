@@ -8,7 +8,7 @@ import (
 	"github.com/marcelocantos/doit/internal/cap"
 )
 
-type Mkdir struct{}
+type Mkdir struct{ Base }
 
 var _ cap.Capability = (*Mkdir)(nil)
 

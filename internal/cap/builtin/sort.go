@@ -8,7 +8,7 @@ import (
 	"github.com/marcelocantos/doit/internal/cap"
 )
 
-type Sort struct{}
+type Sort struct{ Base }
 
 var _ cap.Capability = (*Sort)(nil)
 

@@ -124,6 +124,8 @@ The `pipeline` field is `<elicitation>` for Phase 1 entries and `<elicitation-pr
 | `audit.path` | string | `~/.local/share/doit/audit.jsonl` | Stable |
 | `audit.max_size_mb` | int | `100` | Stable |
 | `audit.l3_max_chars` | int | `16384` | Needs review |
+| `audit.capture_output` | string | `"on_failure"` | Needs review |
+| `audit.output_excerpt_bytes` | int | `4096` | Needs review |
 | `rules.<cap>.reject_flags` | []string | per-capability | Stable |
 | `rules.<cap>.subcommands.<sub>.reject_flags` | []string | per-subcommand | Stable |
 | `policy.level1_enabled` | bool | `true` | Stable |
@@ -207,6 +209,8 @@ collapses the cascade to a single-tier.
 | Proposed rule source | `proposed_rule_source` | string (omitempty) | Needs review |
 | Proposed rule generality | `proposed_rule_generality` | string (omitempty) | Needs review |
 | Proposed rule ID | `proposed_rule_id` | string (omitempty) | Needs review |
+| stdout excerpt | `stdout_excerpt` | string (omitempty) | Needs review |
+| stderr excerpt | `stderr_excerpt` | string (omitempty) | Needs review |
 | Entry hash | `hash` | string (hex SHA-256) | Stable |
 
 **L3Evidence object** (nested within `l3_fast` / `l3_deep`):
@@ -251,6 +255,12 @@ Genesis hash: SHA-256 of `"doit-genesis"`.
 | dangerous | 3 | disabled | Stable |
 
 ### Built-in capabilities (19)
+
+All built-in capabilities expose a `RedactOutput() bool` method (always `false`
+today). When `true`, the capability's stdout and stderr excerpts in the audit log
+are replaced with `<redacted: capability marked sensitive>` regardless of the
+`audit.capture_output` setting. This is forward-compatible scaffolding; no
+built-in capability is currently marked sensitive.
 
 | Name | Tier | Stability |
 |---|---|---|

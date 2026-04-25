@@ -9,7 +9,7 @@ import (
 	"github.com/marcelocantos/doit/internal/cap"
 )
 
-type Find struct{}
+type Find struct{ Base }
 
 var _ cap.Capability = (*Find)(nil)
 

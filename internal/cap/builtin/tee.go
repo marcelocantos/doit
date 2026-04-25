@@ -8,7 +8,7 @@ import (
 	"github.com/marcelocantos/doit/internal/cap"
 )
 
-type Tee struct{}
+type Tee struct{ Base }
 
 var _ cap.Capability = (*Tee)(nil)
 

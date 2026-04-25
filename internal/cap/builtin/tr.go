@@ -9,7 +9,7 @@ import (
 	"github.com/marcelocantos/doit/internal/cap"
 )
 
-type Tr struct{}
+type Tr struct{ Base }
 
 var _ cap.Capability = (*Tr)(nil)
 
