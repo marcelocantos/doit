@@ -114,6 +114,45 @@ maintenance activities. Append-only — newest entries at the bottom.
   - `--help-agent` CLI flag is still missing on the doit binary
     (pre-existing gap; not blocking, captured for a future release).
 
+## 2026-04-26 — /release v0.9.0
+
+- **Commit**: `pending`
+- **Outcome**: Released v0.9.0 (darwin-arm64, linux-amd64, linux-arm64).
+  Postmortem-tooling release — the audit log now captures every signal
+  needed to reconstruct *why* doit made a decision, and `doit_audit_query`
+  makes those signals reachable by filter:
+  - **🎯T37** — L3 chain-of-evidence in the audit log: every L3 invocation
+    records a structured `l3_fast` block (and `l3_deep` when the cascade
+    fires both tiers) containing model name, rendered prompt, model
+    response, latency, decision, and reason. Configurable size cap via
+    `audit.l3_max_chars` (default 16384 per block) with explicit
+    truncation marker.
+  - **🎯T36** — Elicitation outcomes and L2 promotions in the audit chain:
+    Phase 1 (Allow once / Allow always / Deny once / Deny always) and
+    Phase 2 (rule proposed, accepted, or declined) each produce their own
+    audit-chain entry, linked to the originating command via the new
+    `parent_seq` field. New fields: `parent_seq`, `elicitation_prompt`,
+    `elicitation_choice`, `elicitation_latency_ms`, `proposed_rule_source`,
+    `proposed_rule_generality`, `proposed_rule_id`. Reflexive-vs-
+    deliberated approvals are now visible as latency outliers.
+  - **🎯T39** — stdout/stderr excerpts for failure-mode commands: capture
+    up to 4096 bytes of stdout/stderr into new `stdout_excerpt` /
+    `stderr_excerpt` audit fields when `exit_code != 0`,
+    `policy_result == deny`, or `timed_out`. Configurable via
+    `audit.capture_output` and `audit.output_excerpt_bytes`. UTF-8-safe
+    truncation. New `RedactOutput() bool` method on `cap.Capability` is
+    forward-compatible scaffolding for sensitive-command exclusion.
+  - **🎯T38** — `doit_audit_query` MCP tool replaces tail-by-count as the
+    primary postmortem primitive. 14 filter parameters; `latest=true`
+    returns the single most-recent match; `include` (`l3` / `excerpts` /
+    `elicitation`) opts into the heavy fields. Default response strips
+    them to keep result size sane.
+  STABILITY.md snapshot bumped to v0.9.0 with all the new audit fields,
+  the new MCP tool, the new config knobs (`audit.l3_max_chars`,
+  `audit.capture_output`, `audit.output_excerpt_bytes`), and the new
+  capability method. Postmortem-tooling batch recorded as a closed
+  pre-1.0 gap.
+
 ## 2026-04-25 — /release v0.8.0
 
 - **Commit**: `f6d97ff`
