@@ -293,6 +293,11 @@ Genesis hash: SHA-256 of `"doit-genesis"`.
 
 ## Gaps and prerequisites for 1.0
 
+- **Threat model locked in**: [`docs/threat-model.md`](docs/threat-model.md)
+  enumerates what doit defends against, what it does not, and the configuration
+  assumptions the defences depend on. The document must be reviewed and accepted
+  before 1.0 ships — it is the safety contract users rely on.
+
 - **Elicitation phase 2 maturity**: Rule promotion via elicitation is functional
   but the proposal generation (`ProposeRules`) uses simple pattern extraction.
   Needs real-world usage to validate rule quality.
