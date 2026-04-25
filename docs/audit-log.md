@@ -116,7 +116,7 @@ maintenance activities. Append-only — newest entries at the bottom.
 
 ## 2026-04-25 — /release v0.8.0
 
-- **Commit**: `pending`
+- **Commit**: `f6d97ff`
 - **Outcome**: Released v0.8.0 (darwin-arm64, linux-amd64, linux-arm64).
   Threat-model-driven safety follow-ons to v0.7.0 land this release:
   - **🎯T33** — `doit_check_config` reports the full safety contract: every
