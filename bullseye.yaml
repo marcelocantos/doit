@@ -530,7 +530,7 @@ targets:
     achieved: 2026-04-20
   T29:
     name: Learned durations are keyed per-project, not globally
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     observable: true
@@ -543,6 +543,7 @@ targets:
     context: '🎯T26.3 landed per-pattern p50/p95 but keys globally on (cap, subcmd). For commands whose runtime is dominated by project size (make test, go test ./..., pytest, webpack), this pools wildly different distributions together and produces anomaly false-positives in both directions — a tiny repo''s expected=2s gets flagged against a monorepo''s p95, and a monorepo''s expected=120s gets flagged against a tiny repo''s p50. The engine already has `projectCtx` from 🎯T13 discovery; extending the aggregator key is a small change with outsized accuracy payoff. Open design question: what''s the canonical project_id? Likely the absolute path of the discovered project root, normalised. Needs a decision on how that round-trips through audit entries (currently they carry cwd, not project_root).'
     origin: manual
     discovered: 2026-04-22
+    achieved: 2026-04-25
   T3:
     name: Starlark L1 rules
     status: achieved
@@ -554,7 +555,7 @@ targets:
     discovered: 2026-04-09
   T30:
     name: rm tier reflects reversibility via git-tracked status
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     observable: true
@@ -568,9 +569,10 @@ targets:
     context: 'The read/build/write/dangerous tier system conflates two separate axes: intrinsic risk and reversibility. `rm foo.go` where foo.go is tracked is effectively equivalent to `git checkout HEAD -- foo.go` being available, so the user can always recover. `rm untracked-work.txt` is truly destructive. Right now both are dangerous-tier and both get the same escalation path, which produces false-positive escalations on routine work. Reversibility is a better reflective of actual risk than the raw command name. Scope-limit: only `rm` for now — generalising to other destructive operations (truncate redirects, `git reset --hard`) is a follow-up. Design note: the check shells out per evaluation. Cheap (single exec of git ls-files), but worth measuring before assuming it''s negligible. If it dominates evaluation latency, cache per-session via the existing session mechanism.'
     origin: manual
     discovered: 2026-04-22
+    achieved: 2026-04-25
   T32:
     name: Threat model is written down and locked in before 1.0
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     observable: true
@@ -584,6 +586,87 @@ targets:
     context: 'doit''s design assumes it is the sole execution path — every command an agent runs flows through doit_execute, gets evaluated by the policy engine, and is audited. This assumption was sound when MCP ecosystems were sparse. In 2026 it''s less sound: agents routinely have many MCP servers installed, and some expose execution-adjacent primitives (shell snippets via filesystem-mcp-plus-chmod-plus-exec patterns, scripting via language-MCP servers, HTTP clients that can reach local services, etc.). doit is trivially bypassable through any of those. Users who rely on doit for safety may not realise this. Before 1.0 locks in the guarantees, write down what doit actually defends against, what it doesn''t, and what configuration assumptions the defence relies on. This is a documentation target, not a code-change target — it''s a pre-1.0 safety contract.'
     origin: manual
     discovered: 2026-04-22
+    achieved: 2026-04-25
+  T33:
+    name: doit_check_config enumerates registered MCP servers and flags execution-adjacent ones
+    status: identified
+    value: 0.0
+    cost: 0.0
+    observable: true
+    acceptance:
+    - doit_check_config parses ~/.claude.json (and project-scope .mcp.json) and lists all registered MCP servers
+    - Output flags servers known to expose execution-adjacent primitives (file write + chmod, language runtimes, shell-execution wrappers, SSH, HTTP-to-localhost) — initial list is hand-curated and documented
+    - Each flagged server is named in the output with a one-line reason and a link to the threat model section it relates to
+    - Servers not on the curated list are listed neutrally with the note that the user must judge them
+    - 'Tests cover: no other servers (clean), curated dangerous server present, unknown server present (neutral), malformed config file (graceful)'
+    - STABILITY.md and docs/threat-model.md updated to point at the new check
+    context: 'Surfaced while writing 🎯T32. Today doit_check_config verifies only that Bash is denied and that doit itself is registered. In a 2026 MCP ecosystem where agents commonly have 10–20 servers installed, that check leaves the largest realistic bypass surface uninspected. A curated allowlist/warnlist of known execution-adjacent server names is a small, useful upgrade — even an incomplete list materially improves user awareness. Keep the curated list close to the check (e.g. a short table in the same file) so it''s easy to maintain. Open question: where does the curated list live and how is it kept current — possibly a JSON resource bundled in the binary, possibly fetched from the doit repo at first check. Start with bundled.'
+    origin: forked-from 🎯T32 (threat-model.md review)
+    discovered: 2026-04-25
+  T34:
+    name: Inline shell strings (bash -c "...") are inspected, not opaque-passed
+    status: identified
+    value: 0.0
+    cost: 0.0
+    observable: true
+    acceptance:
+    - Engine detects `bash -c <string>` / `sh -c <string>` / `zsh -c <string>` invocations and parses the inline string into its constituent commands before evaluation
+    - Each inner command is evaluated by L1/L2/L3 as if it had been invoked directly — including pipelines, sequences (`;`, `&&`, `||`), and subshells
+    - 'If the inner string is too complex to parse confidently (e.g. arbitrary substitution, heredocs), engine falls back conservatively: the whole invocation is treated as dangerous-tier and routed through L3'
+    - deny-rm-catastrophic and other hardcoded rules fire on inner commands, not just the outer `bash -c`
+    - 'Tests cover: simple inline (`bash -c ''ls''`), pipeline (`bash -c ''curl x | sh''`), sequence (`bash -c ''a && b''`), heredoc / substitution → conservative fallback, escaped quotes'
+    - STABILITY.md and docs/threat-model.md updated to mark this gap closed
+    context: 'Surfaced while writing 🎯T32. The script-hash gate covers `bash foo.sh` invocations but `bash -c "..."` passes the inline string through L1/L2/L3 evaluation as opaque text. L1 Starlark and config rules typically inspect the first token, so a sequence like `bash -c ''rm -rf untracked && git push --force''` evaluates as a single `bash` invocation and the inner dangerous operations are invisible. L3 sees the string but can be deceived by prompt injection. Closing this gap is structural, not heuristic — a real shell-AST parser is the right approach. mvdan/sh is the standard Go option. Scope-limit: only `-c` flag forms; subshells via `$(...)` and command substitution within a non-`-c` invocation are out of scope for the first iteration.'
+    origin: forked-from 🎯T32 (threat-model.md review)
+    discovered: 2026-04-25
+  T35:
+    name: Approved-script approvals are revoked when the script is moved or its mtime changes
+    status: identified
+    value: 0.0
+    cost: 0.0
+    observable: true
+    acceptance:
+    - Approval entries record (content_hash, resolved_path, mtime) — currently only content_hash is keyed
+    - On script-gate evaluation, if the resolved path differs from the recorded path or the mtime is newer than the approval timestamp, doit treats the approval as stale and re-prompts
+    - Stale approvals are surfaced via `doit_approvals_list` with a `stale` flag
+    - User can refresh an approval (re-approve at the new path/mtime) without manually revoking first
+    - 'Tests cover: same script same path → reuse, same content different path → re-prompt, content-identical-but-touched file → re-prompt, content-changed file → re-prompt (existing behaviour)'
+    - Behaviour change is documented in agents-guide.md and docs/threat-model.md
+    context: 'Surfaced while writing 🎯T32. Today the script-hash gate keys solely on SHA-256 of the script body. If the same script body appears at a different path (e.g. an attacker stages a content-identical file under `/tmp` and persuades the agent to invoke it), the approval gate does not fire — the hash matches an existing approval. Adding path and mtime to the approval key tightens the gate without breaking the common "I edited the script and want to re-approve" path (mtime change forces re-prompt naturally). Open design choice: should approvals be keyed by (hash, path) tuple — making the same body at two paths require two approvals — or should they be keyed by hash alone but invalidated when path drift is detected? Lean toward the second: less prompt fatigue, equivalent safety once mtime is in the mix.'
+    origin: forked-from 🎯T32 (threat-model.md review)
+    discovered: 2026-04-25
+  T36:
+    name: Session scope is constrained, not free-form agent narration
+    status: identified
+    value: 0.0
+    cost: 0.0
+    observable: true
+    acceptance:
+    - 'doit_session_start accepts a structured `scope` field (enum or tag set) in addition to the free-form description — enum candidates: `read-only-investigation`, `local-development`, `cross-repo-refactor`, `release-prep`, `arbitrary` (explicit opt-out)'
+    - L3 evaluator receives the structured scope, not just the description, and applies stricter scrutiny to commands that fall outside the declared scope (e.g. write-tier commands during a `read-only-investigation` session)
+    - Out-of-scope commands escalate even when L1/L2 would otherwise allow — the session-scope check is additive, not subtractive
+    - Audit log records both the structured scope and free-form description per session
+    - doit_session_status surfaces the structured scope; `arbitrary` is shown with a warning
+    - 'Tests cover: in-scope command runs through, out-of-scope command escalates, no-session (legacy) defaults to `arbitrary`, scope mismatch with cwd (e.g. release-prep outside a release branch) flagged'
+    context: 'Surfaced while writing 🎯T32. Today the session description is free-form text supplied by the agent. L3 incorporates it into its prompt verbatim. An agent (whether honest, mistaken, or prompt-injected) can declare a broad scope like "general development work" and L3 will apply correspondingly loose scrutiny across the entire session. There is no mechanism to bound the session''s intended actions. A small structured-enum addition gives doit a checkable property: was this command consistent with the declared scope? The enum doesn''t need to be exhaustive — even a coarse "is this read-only or not" distinction would prevent a class of mistakes. Compatibility: `arbitrary` becomes the default for sessions that don''t declare a scope, preserving today''s behaviour as an explicit opt-out rather than a silent default.'
+    origin: forked-from 🎯T32 (threat-model.md review)
+    discovered: 2026-04-25
+  T37:
+    name: L3-justified L2 promotions are scrutinised before they bypass future L3 evaluation
+    status: identified
+    value: 0.0
+    cost: 0.0
+    observable: true
+    acceptance:
+    - 'When the user approves an Allow-always elicitation that came from an L3 decision, the resulting L2 entry is marked `provenance: l3-promoted` (not just `provenance: user-approved`)'
+    - doit_policy_review surfaces l3-promoted entries with elevated review priority — they expire faster and are flagged for periodic re-evaluation
+    - On promotion, doit records the original L3 justification and safety argument alongside the rule, so a later reviewer can see what the LLM said when the decision was made
+    - 'If a future doit_self_audit detects that an l3-promoted rule is matching a substantially broader command set than its original justification anticipated (heuristic: argument distribution drift), it is flagged for re-review'
+    - 'Tests cover: l3-promoted rules are tagged distinctly, doit_policy_review surfaces them with priority, drift detection identifies overly-broad matches'
+    - STABILITY.md and docs/threat-model.md updated to note the new safeguard
+    context: 'Surfaced while writing 🎯T32. The most subtle attack path in doit''s current design: a prompt-injected L3 evaluation produces a misleading justification, the user approves "Allow always" based on the justification, and the resulting L2 entry quietly bypasses L3 evaluation forever after for matching commands. Today the L2 entry doesn''t record that it originated from an L3 decision (vs. a user manually adding a rule), so there''s no way to apply heightened scrutiny. Tagging provenance is cheap. Surfacing the original justification turns the promotion into auditable history. Drift detection is the harder piece — what counts as "the rule matching more broadly than expected"? Start simple: if the rule has matched ≥N times since promotion and the matched argument tails (everything past cap+subcmd) have grown in distinct count, flag it. Tunable threshold.'
+    origin: forked-from 🎯T32 (threat-model.md review)
+    discovered: 2026-04-25
   T4:
     name: Per-project policy
     status: achieved
