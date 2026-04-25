@@ -60,8 +60,9 @@ type TierConfig struct {
 
 // AuditConfig controls audit log settings.
 type AuditConfig struct {
-	Path      string `yaml:"path"`
-	MaxSizeMB int    `yaml:"max_size_mb"`
+	Path       string `yaml:"path"`
+	MaxSizeMB  int    `yaml:"max_size_mb"`
+	L3MaxChars int    `yaml:"l3_max_chars"` // max chars per L3 prompt/response block; 0 = no cap
 }
 
 // DefaultConfig returns the default configuration.
@@ -75,8 +76,9 @@ func DefaultConfig() *Config {
 			Dangerous: false,
 		},
 		Audit: AuditConfig{
-			Path:      filepath.Join(home, ".local", "share", "doit", "audit.jsonl"),
-			MaxSizeMB: 100,
+			Path:       filepath.Join(home, ".local", "share", "doit", "audit.jsonl"),
+			MaxSizeMB:  100,
+			L3MaxChars: 16384,
 		},
 		Policy: PolicyConfig{
 			Level1Enabled: true,

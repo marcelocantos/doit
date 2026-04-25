@@ -5,6 +5,19 @@ package audit
 
 import "time"
 
+// L3Evidence records the chain-of-evidence for a single L3 LLM invocation.
+type L3Evidence struct {
+	Model                 string  `json:"model"`
+	Prompt                string  `json:"prompt"`
+	Response              string  `json:"response"`
+	LatencyMs             float64 `json:"latency_ms"`
+	Decision              string  `json:"decision"`
+	Reason                string  `json:"reason,omitempty"`
+	Truncated             bool    `json:"truncated,omitempty"`
+	OriginalPromptBytes   int     `json:"original_prompt_bytes,omitempty"`
+	OriginalResponseBytes int     `json:"original_response_bytes,omitempty"`
+}
+
 // Entry represents a single audit log record.
 type Entry struct {
 	Seq              uint64    `json:"seq"`
@@ -26,9 +39,11 @@ type Entry struct {
 	PolicyRuleID     string    `json:"policy_rule_id,omitempty"`        // which rule matched
 	Justification    string    `json:"justification,omitempty"`         // worker's justification
 	SafetyArg        string    `json:"safety_arg,omitempty"`            // worker's safety argument
-	ScriptHash       string    `json:"script_hash,omitempty"`           // sha256:... when gated by script-hash approval
-	ScriptPath       string    `json:"script_path,omitempty"`           // resolved script path for script-hash events
-	Hash             string    `json:"hash"`                            // SHA-256 of this entry (with hash field empty)
+	ScriptHash       string      `json:"script_hash,omitempty"`           // sha256:... when gated by script-hash approval
+	ScriptPath       string      `json:"script_path,omitempty"`           // resolved script path for script-hash events
+	L3Fast           *L3Evidence `json:"l3_fast,omitempty"`               // chain-of-evidence for fast-tier L3 invocation
+	L3Deep           *L3Evidence `json:"l3_deep,omitempty"`               // chain-of-evidence for deep-tier L3 invocation (when cascade fires)
+	Hash             string      `json:"hash"`                            // SHA-256 of this entry (with hash field empty)
 }
 
 // LogOptions carries optional metadata for audit entries.
@@ -42,5 +57,7 @@ type LogOptions struct {
 	ScriptPath       string
 	ExpectedDuration float64 // milliseconds; 0 = unspecified
 	TimedOut         bool
-	ProjectRoot      string // normalised project root path (for duration keying)
+	ProjectRoot      string      // normalised project root path (for duration keying)
+	L3Fast           *L3Evidence // chain-of-evidence for fast-tier L3 invocation
+	L3Deep           *L3Evidence // chain-of-evidence for deep-tier L3 invocation
 }

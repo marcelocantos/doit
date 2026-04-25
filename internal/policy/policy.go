@@ -64,6 +64,7 @@ type EvalInfo struct {
 	RuleID        string
 	Justification string
 	SafetyArg     string
+	L3Evidence    *CascadeEvidence // non-nil when L3 fired
 }
 
 type evalInfoKey struct{}

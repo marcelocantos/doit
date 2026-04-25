@@ -46,6 +46,15 @@ type Client struct {
 	CommandFunc func(ctx context.Context, name string, args ...string) *exec.Cmd
 }
 
+// ModelName returns the configured model name (implements policy.ModelNamer).
+// Returns "default" when no model is set, matching what the claude CLI uses.
+func (c *Client) ModelName() string {
+	if c.Model != "" {
+		return c.Model
+	}
+	return "default"
+}
+
 // Prompt sends the given prompt to the LLM and returns the trimmed response.
 func (c *Client) Prompt(ctx context.Context, prompt string) (string, error) {
 	timeout := c.Timeout

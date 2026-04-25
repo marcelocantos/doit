@@ -8,6 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
+
+	"github.com/marcelocantos/doit/internal/audit"
 )
 
 // xmlEscape replaces the five XML special characters so that data values
@@ -24,6 +27,12 @@ func xmlEscape(s string) string {
 // Prompter abstracts the LLM call for testability.
 type Prompter interface {
 	Prompt(ctx context.Context, prompt string) (string, error)
+}
+
+// ModelNamer is an optional interface that a Prompter may implement to
+// expose the model name for audit-log evidence.
+type ModelNamer interface {
+	ModelName() string
 }
 
 // SessionPrompter extends Prompter with session-aware prompting that
@@ -60,7 +69,8 @@ type SessionContext struct {
 // Evaluate asks the LLM whether to allow, deny, or escalate the request.
 // If req.Retry is true, the command is allowed immediately without an LLM call.
 func (l *Level3) Evaluate(ctx context.Context, req *Request) *Result {
-	return l.evaluate(ctx, req, nil)
+	result, _ := l.EvaluateWithEvidence(ctx, req, nil, 0)
+	return result
 }
 
 // EvaluateInSession is like Evaluate but prepends the active work
@@ -68,35 +78,46 @@ func (l *Level3) Evaluate(ctx context.Context, req *Request) *Result {
 // buildSessionPrefix) so the gatekeeper has the context it needs to
 // make scope-aware decisions.
 func (l *Level3) EvaluateInSession(ctx context.Context, req *Request, session *SessionContext) *Result {
-	return l.evaluate(ctx, req, session)
+	result, _ := l.EvaluateWithEvidence(ctx, req, session, 0)
+	return result
 }
 
-func (l *Level3) evaluate(ctx context.Context, req *Request, session *SessionContext) *Result {
+// EvaluateWithEvidence is like EvaluateInSession but also returns
+// chain-of-evidence for audit logging. maxChars caps each prompt/response
+// block; 0 means no cap.
+func (l *Level3) EvaluateWithEvidence(ctx context.Context, req *Request, session *SessionContext, maxChars int) (*Result, *CascadeEvidence) {
+	return l.evaluate(ctx, req, session, maxChars)
+}
+
+func (l *Level3) evaluate(ctx context.Context, req *Request, session *SessionContext, maxChars int) (*Result, *CascadeEvidence) {
 	if req.Retry {
 		return &Result{
 			Decision: Allow,
 			Level:    3,
 			Reason:   "--retry bypasses Level 3",
-		}
+		}, nil
 	}
 
 	// Tier 1: fast model triage.
-	fastResult := l.callLLM(ctx, req, session, l.fast, true)
+	fastResult, fastEv := l.callLLM(ctx, req, session, l.fast, true, maxChars)
+	ev := &CascadeEvidence{Fast: fastEv}
 	if fastResult.Decision != Escalate {
 		// Fast model was confident — use its decision.
-		return fastResult
+		return fastResult, ev
 	}
 
 	// Tier 2: deep model for uncertain cases.
 	if l.deep != nil {
-		return l.callLLM(ctx, req, session, l.deep, false)
+		deepResult, deepEv := l.callLLM(ctx, req, session, l.deep, false, maxChars)
+		ev.Deep = deepEv
+		return deepResult, ev
 	}
 
 	// No deep model — return the fast model's escalation.
-	return fastResult
+	return fastResult, ev
 }
 
-func (l *Level3) callLLM(ctx context.Context, req *Request, session *SessionContext, client Prompter, fast bool) *Result {
+func (l *Level3) callLLM(ctx context.Context, req *Request, session *SessionContext, client Prompter, fast bool, maxChars int) (*Result, *audit.L3Evidence) {
 	prompt := buildPrompt(req, fast)
 	if session != nil {
 		prompt = buildSessionPrefix(session) + prompt
@@ -106,6 +127,7 @@ func (l *Level3) callLLM(ctx context.Context, req *Request, session *SessionCont
 		raw string
 		err error
 	)
+	t0 := time.Now()
 	if session != nil {
 		if sp, ok := client.(SessionPrompter); ok {
 			raw, err = sp.PromptWithinSession(ctx, prompt)
@@ -115,22 +137,32 @@ func (l *Level3) callLLM(ctx context.Context, req *Request, session *SessionCont
 	} else {
 		raw, err = client.Prompt(ctx, prompt)
 	}
+	latencyMs := float64(time.Since(t0).Microseconds()) / 1000.0
+
+	modelName := ""
+	if mn, ok := client.(ModelNamer); ok {
+		modelName = mn.ModelName()
+	}
 
 	if err != nil {
-		return &Result{
+		result := &Result{
 			Decision: Escalate,
 			Level:    3,
 			Reason:   fmt.Sprintf("LLM error: %v", err),
 		}
+		ev := buildL3Evidence(modelName, prompt, "", latencyMs, result.Decision, result.Reason, maxChars)
+		return result, ev
 	}
 
-	dec, reasoning, err := parseL3Decision(raw)
-	if err != nil {
-		return &Result{
+	dec, reasoning, parseErr := parseL3Decision(raw)
+	if parseErr != nil {
+		result := &Result{
 			Decision: Escalate,
 			Level:    3,
-			Reason:   fmt.Sprintf("unparseable LLM response: %v", err),
+			Reason:   fmt.Sprintf("unparseable LLM response: %v", parseErr),
 		}
+		ev := buildL3Evidence(modelName, prompt, raw, latencyMs, result.Decision, result.Reason, maxChars)
+		return result, ev
 	}
 
 	ruleID := "llm-gatekeeper"
@@ -141,13 +173,15 @@ func (l *Level3) callLLM(ctx context.Context, req *Request, session *SessionCont
 		ruleID += "-fast"
 	}
 
-	return &Result{
+	result := &Result{
 		Decision:   dec,
 		Level:      3,
 		Reason:     reasoning,
 		RuleID:     ruleID,
 		Bypassable: true,
 	}
+	ev := buildL3Evidence(modelName, prompt, raw, latencyMs, dec, reasoning, maxChars)
+	return result, ev
 }
 
 // buildSessionPrefix creates an instruction prefix for session-aware evaluation.
