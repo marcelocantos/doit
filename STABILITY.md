@@ -5,7 +5,7 @@ breaking changes to the public API, MCP interface, configuration format,
 audit log format, or Starlark rule contract will require a major version
 bump. The pre-1.0 period exists to get these right.
 
-Snapshot as of v0.7.0.
+Snapshot as of v0.8.0.
 
 ## Interaction surface catalogue
 
@@ -125,6 +125,7 @@ Snapshot as of v0.7.0.
 | `policy.level3_model` | string | `"opus"` | Needs review |
 | `policy.level3_timeout` | string | `"60s"` | Stable |
 | `policy.starlark_rules_dir` | string | `""` | Stable |
+| `policy.acknowledged_sibling_servers` | []string | `[]` | Needs review |
 
 ### Per-project configuration (`.doit/config.yaml`)
 
@@ -231,7 +232,7 @@ Genesis hash: SHA-256 of `"doit-genesis"`.
 | make | build | Stable |
 | mkdir | write | Stable |
 | mv | write | Stable |
-| rm | dangerous | Stable |
+| rm | varies | Stable |
 | sort | read | Stable |
 | tail | read | Stable |
 | tee | write | Stable |
@@ -244,6 +245,15 @@ Genesis hash: SHA-256 of `"doit-genesis"`.
 | Rule | Capability | Condition | Stability |
 |---|---|---|---|
 | Catastrophic rm | rm | `-r`/`-R` with `/`, `.`, `..`, `~` | Stable |
+
+### `rm` per-target tier (reflects reversibility via git-tracked status)
+
+| Target | Tier | Stability |
+|---|---|---|
+| `rm <git-tracked file>` (non-recursive) | write (recoverable via `git checkout HEAD -- <path>`) | Needs review |
+| `rm <untracked file>` | dangerous (irrecoverable) | Stable |
+| `rm -r <anything>` | dangerous (sub-tree recovery is harder) | Stable |
+| `rm <path outside any git repo>` | dangerous (conservative) | Stable |
 
 ### Default config rules (bypassable with --retry)
 
@@ -279,7 +289,7 @@ Genesis hash: SHA-256 of `"doit-genesis"`.
 | Storage | `~/.config/doit/duration-stats.yaml` (per-user) | Needs review |
 | Aggregator | `policy.AggregateDurations(entries)` — successful non-timed-out runs only | Needs review |
 | Distribution | p50 and p95 (linear interpolation) in milliseconds | Needs review |
-| Keying | `(cap, subcmd)` from audit segments (fallback: first two words of Pipeline) | Needs review |
+| Keying | `(cap, subcmd, project_id)` — project_id derives from project root path; null project context shares a global bucket | Needs review |
 | Anomaly thresholds | factor = 5× (expected below p50/5 or above p95×5); min samples = 5 | Needs review |
 | Refresh trigger | Background piggy-back on `tryPromote`; explicit `Engine.LearnDurations()` | Needs review |
 
@@ -293,10 +303,22 @@ Genesis hash: SHA-256 of `"doit-genesis"`.
 
 ## Gaps and prerequisites for 1.0
 
-- **Threat model locked in**: [`docs/threat-model.md`](docs/threat-model.md)
-  enumerates what doit defends against, what it does not, and the configuration
-  assumptions the defences depend on. The document must be reviewed and accepted
-  before 1.0 ships — it is the safety contract users rely on.
+- **Threat-model loop closed**: [`docs/threat-model.md`](docs/threat-model.md)
+  enumerates the safety contract; `doit_check_config` reports each of the seven
+  load-bearing settings the contract depends on (v0.8.0 — 🎯T33);
+  [`docs/l3-injection.md`](docs/l3-injection.md) enumerates the L3 prompt-injection
+  surface, the L3 prompt is XML-tag hardened, and a 10-payload regression corpus
+  lives in `internal/llm/testdata/` (v0.8.0 — 🎯T35); a startup warning fires when
+  sibling MCP servers expose execution-adjacent primitives, suppressible via
+  `policy.acknowledged_sibling_servers` (v0.8.0 — 🎯T34). Document review pre-1.0
+  is still required, but the runtime affordances are now in place.
+
+- **Third-party attribution (NOTICES)**: doit's binary distributions transitively
+  link Go-module dependencies (`gopkg.in/yaml.v3`, `go.starlark.net`,
+  `golang.org/x/sys`, `mark3labs/mcp-go`). A `NOTICES` or `THIRD_PARTY_LICENSES`
+  file enumerating each dependency with its licence text is missing. Required
+  before 1.0 — distributing binaries without attribution is a licence concern
+  for permissive licences with attribution clauses.
 
 - **Elicitation phase 2 maturity**: Rule promotion via elicitation is functional
   but the proposal generation (`ProposeRules`) uses simple pattern extraction.

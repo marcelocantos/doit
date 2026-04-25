@@ -114,6 +114,48 @@ maintenance activities. Append-only — newest entries at the bottom.
   - `--help-agent` CLI flag is still missing on the doit binary
     (pre-existing gap; not blocking, captured for a future release).
 
+## 2026-04-25 — /release v0.8.0
+
+- **Commit**: `pending`
+- **Outcome**: Released v0.8.0 (darwin-arm64, linux-amd64, linux-arm64).
+  Threat-model-driven safety follow-ons to v0.7.0 land this release:
+  - **🎯T33** — `doit_check_config` reports the full safety contract: every
+    one of the seven load-bearing configuration items the threat model
+    names is now surfaced with a stable §N marker, the current value, and
+    the safety-model interpretation. Settings weakened from defaults
+    (`[FAIL]` / `[WARN]`) are visually distinct from informational items
+    that describe user responsibilities (`[INFO]`).
+  - **🎯T34** — Startup warning for sibling MCP servers with
+    execution-adjacent primitives (filesystem-write+chmod, shell-snippet
+    runners, language interpreters, HTTP-to-localhost). Suppressible
+    per-server via the new `policy.acknowledged_sibling_servers: [...]`
+    config field. Backed by a name/pattern classification heuristic in
+    the new `internal/mcpinventory` package.
+  - **🎯T35** — L3 prompt-injection surface enumerated in
+    `docs/l3-injection.md` with per-input trust level, position,
+    mitigation, and gap classification. The L3 prompt template now wraps
+    every agent-supplied field (command, cwd, justification, safety
+    argument, session scope, session description) in XML data tags with
+    full XML character escaping; the model is instructed to treat tag
+    contents as data only. A 10-payload prompt-injection regression
+    corpus lives in `internal/llm/testdata/injection_corpus.yaml` and is
+    exercised by the renderer test on every CI run.
+  - **🎯T29** — Learned duration statistics now key on
+    `(cap, subcmd, project_id)` rather than the global `(cap, subcmd)`,
+    eliminating false-positive anomaly flags between projects of
+    different sizes. Project-context-less commands share a fallback
+    bucket.
+  - **🎯T30** — `rm` tier reflects reversibility via git-tracked status:
+    a non-recursive `rm` on a tracked file is now write-tier (recoverable
+    via `git checkout HEAD -- <path>`) rather than dangerous-tier.
+    Untracked, recursive, and outside-repo cases remain dangerous.
+    Hardcoded catastrophic rules still fire regardless of tier.
+  STABILITY.md snapshot bumped to v0.8.0 with the new
+  `acknowledged_sibling_servers` config field, the per-target `rm` tier
+  table, and the project-keyed duration aggregator. New pre-1.0 gap:
+  third-party attribution (NOTICES) for transitive Go-module dependencies
+  in binary distributions.
+
 ## 2026-04-21 — /release v0.7.0
 
 - **Commit**: `2e933f2`
