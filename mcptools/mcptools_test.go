@@ -30,8 +30,8 @@ func TestRegister_AddsTools(t *testing.T) {
 			t.Errorf("missing tool: %s", name)
 		}
 	}
-	if len(tools) != 19 {
-		t.Errorf("expected 19 tools, got %d", len(tools))
+	if len(tools) != 20 {
+		t.Errorf("expected 20 tools, got %d", len(tools))
 	}
 }
 

@@ -47,6 +47,7 @@ Snapshot as of v0.8.0.
 |---|---|---|
 | `doit_audit_verify` | (none) | Stable |
 | `doit_audit_tail` | count (optional, default 20) | Stable |
+| `doit_audit_query` | policy_result, policy_level, rule_id, cwd_substring, project_root, since, until, exit_code, cap, command_substring, parent_seq, limit (default 20, max 200), latest (default false), include (l3/excerpts/elicitation) | Needs review |
 
 **Deployment and context**
 

@@ -91,6 +91,7 @@ automatically.
 |---|---|
 | `doit_audit_verify` | Verify audit log hash chain integrity |
 | `doit_audit_tail` | Show recent audit log entries |
+| `doit_audit_query` | Filtered lookups for postmortem analysis (by result, level, rule, cwd, cap, time range, exit code, and more) |
 
 **Deployment and context**
 

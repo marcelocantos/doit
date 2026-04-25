@@ -106,6 +106,28 @@ func Register(srv *server.MCPServer, eng *engine.Engine) {
 		handleAuditTail(eng),
 	)
 
+	srv.AddTool(
+		mcp.NewTool("doit_audit_query",
+			mcp.WithDescription("Query the audit log with filters. Returns matching entries oldest-first. "+
+				"Primary postmortem path: doit_audit_query(policy_result=\"deny\", latest=true) answers \"the last thing doit refused\"."),
+			mcp.WithString("policy_result", mcp.Description("Filter by policy result: allow, deny, escalate, allow_once, allow_always, deny_once, deny_always, proposal_accepted, proposal_declined")),
+			mcp.WithNumber("policy_level", mcp.Description("Filter by policy level: 1, 2, or 3")),
+			mcp.WithString("rule_id", mcp.Description("Filter by policy rule ID (exact match)")),
+			mcp.WithString("cwd_substring", mcp.Description("Filter entries whose cwd contains this substring")),
+			mcp.WithString("project_root", mcp.Description("Filter by project root (exact match)")),
+			mcp.WithString("since", mcp.Description("Lower bound on timestamp: RFC3339 string OR relative duration like \"1h\", \"30m\", \"24h\"")),
+			mcp.WithString("until", mcp.Description("Upper bound on timestamp: same format as since")),
+			mcp.WithString("exit_code", mcp.Description("Filter by exit code: integer value OR \"nonzero\" for any non-zero exit")),
+			mcp.WithString("cap", mcp.Description("Filter by capability name (exact match against any element of segments)")),
+			mcp.WithString("command_substring", mcp.Description("Filter entries whose pipeline field contains this substring")),
+			mcp.WithNumber("parent_seq", mcp.Description("Filter by parent_seq (returns child entries for elicitation chain reconstruction)")),
+			mcp.WithNumber("limit", mcp.Description("Maximum entries to return (default 20, max 200)")),
+			mcp.WithBoolean("latest", mcp.Description("Return only the single most recent matching entry (default false)")),
+			mcp.WithString("include", mcp.Description("Comma-separated list of expensive fields to include: l3 (L3Fast/L3Deep), excerpts (stdout_excerpt/stderr_excerpt), elicitation (elicitation fields). Default omits these fields.")),
+		),
+		handleAuditQuery(eng),
+	)
+
 	// Policy management tools.
 	srv.AddTool(
 		mcp.NewTool("doit_policy_list",
@@ -664,6 +686,145 @@ func handleAuditTail(eng *engine.Engine) server.ToolHandlerFunc {
 		}
 		data, _ := json.MarshalIndent(entries, "", "  ")
 		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+func handleAuditQuery(eng *engine.Engine) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+
+		f := &audit.Filter{}
+
+		if s := argString(args, "policy_result"); s != "" {
+			f.PolicyResult = s
+		}
+		if n := argInt(args, "policy_level"); n != 0 {
+			f.PolicyLevel = n
+		}
+		if s := argString(args, "rule_id"); s != "" {
+			f.RuleID = s
+		}
+		if s := argString(args, "cwd_substring"); s != "" {
+			f.CwdSubstring = s
+		}
+		if s := argString(args, "project_root"); s != "" {
+			f.ProjectRoot = s
+		}
+		if s := argString(args, "since"); s != "" {
+			t, err := parseTimeOrDuration(s)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("invalid since: %v", err)), nil
+			}
+			f.After = t
+		}
+		if s := argString(args, "until"); s != "" {
+			t, err := parseTimeOrDuration(s)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("invalid until: %v", err)), nil
+			}
+			f.Before = t
+		}
+		if s := argString(args, "exit_code"); s != "" {
+			if s == "nonzero" {
+				f.Nonzero = true
+			} else {
+				// try parsing as int
+				code := 0
+				if _, err := fmt.Sscanf(s, "%d", &code); err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("invalid exit_code: %q (must be integer or \"nonzero\")", s)), nil
+				}
+				f.ExitCode = &code
+			}
+		} else if n, ok := args["exit_code"].(float64); ok {
+			code := int(n)
+			f.ExitCode = &code
+		}
+		if s := argString(args, "cap"); s != "" {
+			f.Cap = s
+		}
+		if s := argString(args, "command_substring"); s != "" {
+			f.CommandSubstring = s
+		}
+		if n := argInt(args, "parent_seq"); n != 0 {
+			f.ParentSeq = uint64(n)
+		}
+
+		limit := 20
+		if n := argInt(args, "limit"); n > 0 {
+			if n > 200 {
+				n = 200
+			}
+			limit = n
+		}
+		f.Limit = limit
+
+		latest, _ := args["latest"].(bool)
+
+		include := argString(args, "include")
+		includeL3 := strings.Contains(include, "l3")
+		includeExcerpts := strings.Contains(include, "excerpts")
+		includeElicitation := strings.Contains(include, "elicitation")
+
+		if latest {
+			entry, err := audit.QueryLatest(eng.AuditPath(), f)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to query audit log: %v", err)), nil
+			}
+			if entry == nil {
+				return mcp.NewToolResultText(""), nil
+			}
+			stripFields(entry, includeL3, includeExcerpts, includeElicitation)
+			data, _ := json.Marshal(entry)
+			return mcp.NewToolResultText(string(data)), nil
+		}
+
+		entries, err := audit.Query(eng.AuditPath(), f)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to query audit log: %v", err)), nil
+		}
+		if len(entries) == 0 {
+			return mcp.NewToolResultText(""), nil
+		}
+
+		var b strings.Builder
+		for i := range entries {
+			stripFields(&entries[i], includeL3, includeExcerpts, includeElicitation)
+			data, _ := json.Marshal(entries[i])
+			b.Write(data)
+			b.WriteByte('\n')
+		}
+		return mcp.NewToolResultText(b.String()), nil
+	}
+}
+
+// parseTimeOrDuration parses s as either a Go duration (e.g. "1h", "30m") —
+// in which case the result is time.Now().Add(-duration) — or an RFC3339
+// timestamp. Returns an error if neither parse succeeds.
+func parseTimeOrDuration(s string) (time.Time, error) {
+	if d, err := time.ParseDuration(s); err == nil {
+		return time.Now().Add(-d), nil
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("must be a duration (e.g. \"1h\") or RFC3339 timestamp")
+}
+
+// stripFields zeroes out expensive/large fields on an entry according to the
+// caller's include flags. By default all four sets of heavy fields are
+// stripped; passing the corresponding include flag re-enables them.
+func stripFields(e *audit.Entry, includeL3, includeExcerpts, includeElicitation bool) {
+	if !includeL3 {
+		e.L3Fast = nil
+		e.L3Deep = nil
+	}
+	if !includeExcerpts {
+		e.StdoutExcerpt = ""
+		e.StderrExcerpt = ""
+	}
+	if !includeElicitation {
+		e.ElicitationPrompt = ""
+		e.ProposedRuleSource = ""
 	}
 }
 
