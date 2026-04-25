@@ -623,7 +623,8 @@ targets:
     discovered: 2026-04-25
   T35:
     name: L3 evaluator's prompt-injection surface is enumerated and mitigations gap-checked
-    status: identified
+    status: achieved
+    achieved: 2026-04-25
     value: 0.0
     cost: 0.0
     observable: true

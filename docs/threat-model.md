@@ -174,15 +174,22 @@ only the Bash tool. Other execution paths exist and are not covered:
 ### 2. Prompt injection into L3
 
 The L3 evaluator receives the command string, cwd, justification, and safety
-argument verbatim in its prompt. An adversarially crafted command or
-justification can attempt to manipulate the LLM into issuing an "allow"
-decision. The L3 result is still subject to user confirmation via elicitation
-in most cases — but if the user has established a broad L2 "allow always"
-pattern that matches the injected command, it may bypass L3 entirely.
+argument in its prompt. An adversarially crafted command or justification can
+attempt to manipulate the LLM into issuing an "allow" decision. The L3 result
+is still subject to user confirmation via elicitation in most cases — but if
+the user has established a broad L2 "allow always" pattern that matches the
+injected command, it may bypass L3 entirely.
 
 Prompt injection into L3 does not guarantee a bypass (the user still sees the
 elicitation), but it can produce misleading reasoning that influences the
 user's decision.
+
+The injection surface is fully enumerated with per-input mitigations in
+[docs/l3-injection.md](l3-injection.md). The L3 prompt now wraps all
+agent-supplied fields in XML data tags with XML character escaping, includes
+explicit data/instruction separation instructions, and pins the output format.
+Residual risks (social engineering, Unicode obfuscation) are accepted and
+documented there.
 
 ### 3. Attacks on the policy store itself
 
