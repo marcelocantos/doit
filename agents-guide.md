@@ -75,6 +75,7 @@ interface for command execution.
 |---|---|
 | `doit_audit_verify` | Verify audit log hash chain integrity |
 | `doit_audit_tail` | Show recent audit log entries |
+| `doit_audit_query` | Query the audit log with filters for postmortem analysis |
 
 ### Deployment and context
 
@@ -250,6 +251,37 @@ an entry. Revocation is also audited.
 All invocations are logged to a tamper-evident audit trail (SHA-256 hash
 chain). Use `doit_audit_verify` to check integrity and `doit_audit_tail`
 to view recent entries.
+
+### Postmortem queries with `doit_audit_query`
+
+`doit_audit_query` accepts filter parameters for targeted lookups. All
+filters are ANDed. Results are returned oldest-first, up to `limit`
+(default 20, max 200).
+
+```
+# The last thing doit refused
+doit_audit_query(policy_result="deny", latest=true)
+
+# All L3 escalations in the last hour, with the L3 prompt + response
+doit_audit_query(policy_level=3, since="1h", include="l3")
+
+# The elicitation chain that created a particular rule
+doit_audit_query(parent_seq=<seq from policy_rule_id lookup>, include="elicitation")
+```
+
+Key parameters:
+
+- `policy_result` — allow, deny, escalate, allow_once, allow_always, deny_once, deny_always, proposal_accepted, proposal_declined
+- `policy_level` — 1, 2, or 3
+- `rule_id` — exact match against the `policy_rule_id` field
+- `cwd_substring` / `project_root` — scope by working directory
+- `since` / `until` — relative duration ("1h", "30m") or RFC3339 timestamp
+- `exit_code` — integer value or `"nonzero"` for any non-zero exit
+- `cap` — capability name (exact match against any element of `segments`)
+- `command_substring` — substring match against the `pipeline` field
+- `parent_seq` — returns child (elicitation) entries linking back to the given sequence number
+- `latest` — return only the single most recent matching entry
+- `include` — comma-separated: `l3` (L3Fast/L3Deep), `excerpts` (stdout/stderr), `elicitation` (prompt/rule source). Default omits these large fields.
 
 Script-hash events carry two additional fields:
 

@@ -769,3 +769,22 @@ targets:
     origin: manual
     discovered: 2026-04-25
     achieved: 2026-04-25
+
+  T38:
+    name: doit_audit_query MCP tool supports filtered postmortem lookups
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    observable: true
+    acceptance:
+    - doit_audit_query MCP tool accepts filter parameters (policy_result, policy_level, rule_id, cwd_substring, project_root, since, until, exit_code, cap, command_substring, parent_seq, limit, latest, include)
+    - latest=true returns only the most recent matching entry; no match returns empty response
+    - include parameter selects which expensive fields are returned (l3, excerpts, elicitation); default omits them
+    - Output is JSON entries one per line, oldest-first within the limit
+    - Filtering is server-side; no hash-chain re-verification
+    - STABILITY.md catalogue updated with the new tool and parameter set
+    - Tests cover filtering by each parameter individually, combined filters, latest=true, since duration semantics, empty result set, parent_seq lookup
+    - agents-guide.md describes the postmortem workflow with concrete examples
+    origin: manual
+    discovered: 2026-04-25
+    achieved: 2026-04-25
