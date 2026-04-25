@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 
 	"github.com/marcelocantos/doit/engine"
 	"github.com/marcelocantos/doit/internal/audit"
+	"github.com/marcelocantos/doit/internal/config"
 	doitctx "github.com/marcelocantos/doit/internal/context"
 	"github.com/marcelocantos/doit/internal/policy"
 )
@@ -218,12 +220,13 @@ func Register(srv *server.MCPServer, eng *engine.Engine) {
 	// Deployment verification tool.
 	srv.AddTool(
 		mcp.NewTool("doit_check_config",
-			mcp.WithDescription("Verify that doit is correctly configured as the sole execution path. "+
-				"Checks that the Bash tool is denied in Claude Code settings and that the doit MCP server "+
-				"is registered. Returns a report of what is configured correctly and what is missing."),
+			mcp.WithDescription("Verify that the deployed doit configuration matches the safety contract "+
+				"described in docs/threat-model.md. Reports each load-bearing setting with its current "+
+				"value and the safety-model interpretation, distinguishing settings that have been "+
+				"weakened from defaults from those merely informing the user of their responsibilities."),
 			mcp.WithString("settings_path", mcp.Description("Path to Claude Code settings.json (default: ~/.claude/settings.json)")),
 		),
-		handleCheckConfig(),
+		handleCheckConfig(eng),
 	)
 }
 
@@ -792,7 +795,7 @@ func handleRepoRead(eng *engine.Engine) server.ToolHandlerFunc {
 	}
 }
 
-func handleCheckConfig() server.ToolHandlerFunc {
+func handleCheckConfig(eng *engine.Engine) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
@@ -805,43 +808,318 @@ func handleCheckConfig() server.ToolHandlerFunc {
 		}
 		claudeJSONPath := filepath.Join(homeDir, ".claude.json")
 
+		cwd, _ := os.Getwd()
+		results := []checkResult{
+			checkBashDenyStatus(settingsPath),
+			checkDoitRegisteredStatus(claudeJSONPath),
+			checkSiblingMCPServers(claudeJSONPath),
+			checkDangerousTier(eng.Config()),
+			checkPolicyStorePermissions(eng),
+			checkL3Models(eng.Config()),
+			checkProjectConfig(cwd),
+		}
+
 		var b strings.Builder
-		allOK := true
+		fmt.Fprintf(&b, "=== doit Configuration Check ===\n")
+		fmt.Fprintf(&b, "Reference: %s\n\n", threatModelURL)
 
-		// Check 1: Bash is denied in settings.json.
-		bashDenied, settingsErr := checkBashDenied(settingsPath)
-		if settingsErr != nil {
-			fmt.Fprintf(&b, "[WARN] Cannot read %s: %v\n", settingsPath, settingsErr)
-			allOK = false
-		} else if bashDenied {
-			fmt.Fprintf(&b, "[OK]   Bash tool is denied in %s\n", settingsPath)
-		} else {
-			fmt.Fprintf(&b, "[FAIL] Bash tool is NOT denied in %s\n", settingsPath)
-			fmt.Fprintf(&b, "       Add {\"permissions\":{\"deny\":[\"Bash\"]}} to enforce doit as sole execution path.\n")
-			allOK = false
+		var weakened, info int
+		for _, r := range results {
+			r.render(&b)
+			b.WriteByte('\n')
+			switch r.level {
+			case checkWarn, checkFail:
+				weakened++
+			case checkInfo:
+				info++
+			}
 		}
 
-		// Check 2: doit MCP server is registered in ~/.claude.json.
-		doitRegistered, claudeJSONErr := checkDoitRegistered(claudeJSONPath)
-		if claudeJSONErr != nil {
-			fmt.Fprintf(&b, "[WARN] Cannot read %s: %v\n", claudeJSONPath, claudeJSONErr)
-			allOK = false
-		} else if doitRegistered {
-			fmt.Fprintf(&b, "[OK]   doit MCP server is registered in %s\n", claudeJSONPath)
-		} else {
-			fmt.Fprintf(&b, "[FAIL] doit MCP server is NOT registered in %s\n", claudeJSONPath)
-			fmt.Fprintf(&b, "       Run: claude mcp add --scope user --transport stdio doit -- doit\n")
-			allOK = false
-		}
-
-		if allOK {
-			fmt.Fprintf(&b, "\ndoit is correctly configured as the sole execution path.\n")
-		} else {
-			fmt.Fprintf(&b, "\nConfiguration incomplete — see FAIL/WARN items above.\n")
+		switch {
+		case weakened > 0:
+			fmt.Fprintf(&b, "Configuration weakened from the safety-contract baseline — %d item(s) need attention.\n", weakened)
+		case info > 0:
+			fmt.Fprintf(&b, "doit is correctly configured against the safety contract. %d informational item(s) above describe user responsibilities — review and acknowledge.\n", info)
+		default:
+			fmt.Fprintf(&b, "doit is correctly configured against the safety contract.\n")
 		}
 
 		return mcp.NewToolResultText(b.String()), nil
 	}
+}
+
+const threatModelURL = "https://github.com/marcelocantos/doit/blob/master/docs/threat-model.md#configuration-assumptions"
+
+// checkLevel classifies a checkResult. checkOK means the threat-model
+// baseline holds; checkWarn/checkFail mean it has been weakened; checkInfo
+// is for items the threat model labels "user's responsibility" where doit
+// can only report state, not assert correctness.
+type checkLevel int
+
+const (
+	checkOK checkLevel = iota
+	checkInfo
+	checkWarn
+	checkFail
+)
+
+// checkResult is a single line in the configuration check output. The
+// section field is the stable §N marker tying the result back to a numbered
+// item in docs/threat-model.md#configuration-assumptions; tests assert on
+// it so output reorganisation does not silently break the cross-reference.
+type checkResult struct {
+	section   string
+	summary   string
+	level     checkLevel
+	details   []string
+	threatRef string
+	fix       string
+}
+
+func (r checkResult) render(b *strings.Builder) {
+	prefix := "[OK]  "
+	switch r.level {
+	case checkInfo:
+		prefix = "[INFO]"
+	case checkWarn:
+		prefix = "[WARN]"
+	case checkFail:
+		prefix = "[FAIL]"
+	}
+	fmt.Fprintf(b, "%s %s %s\n", prefix, r.section, r.summary)
+	for _, d := range r.details {
+		fmt.Fprintf(b, "       %s\n", d)
+	}
+	if r.threatRef != "" {
+		fmt.Fprintf(b, "       %s\n", r.threatRef)
+	}
+	if r.fix != "" {
+		fmt.Fprintf(b, "       Fix: %s\n", r.fix)
+	}
+}
+
+func checkBashDenyStatus(settingsPath string) checkResult {
+	r := checkResult{
+		section:   "§1",
+		summary:   "Bash tool is denied in Claude Code settings",
+		threatRef: "Threat model §1: without this, Claude Code's built-in Bash tool bypasses doit entirely.",
+	}
+	denied, err := checkBashDenied(settingsPath)
+	switch {
+	case err != nil:
+		r.level = checkFail
+		r.summary = "Cannot read Claude Code settings"
+		r.details = []string{fmt.Sprintf("path: %s", settingsPath), fmt.Sprintf("error: %v", err)}
+		r.fix = "Create ~/.claude/settings.json or specify settings_path."
+	case denied:
+		r.details = []string{fmt.Sprintf("settings: %s", settingsPath)}
+	default:
+		r.level = checkFail
+		r.summary = "Bash tool is NOT denied — every L1/L2/L3 control is bypassable"
+		r.details = []string{fmt.Sprintf("settings: %s", settingsPath)}
+		r.fix = `add {"permissions":{"deny":["Bash"]}} to settings.json.`
+	}
+	return r
+}
+
+func checkDoitRegisteredStatus(claudeJSONPath string) checkResult {
+	r := checkResult{
+		section:   "§2",
+		summary:   "doit MCP server is registered",
+		threatRef: "Threat model §2: without registration, doit_execute is unavailable to the agent.",
+	}
+	registered, err := checkDoitRegistered(claudeJSONPath)
+	switch {
+	case err != nil:
+		r.level = checkFail
+		r.summary = "Cannot read Claude config"
+		r.details = []string{fmt.Sprintf("path: %s", claudeJSONPath), fmt.Sprintf("error: %v", err)}
+	case registered:
+		r.details = []string{fmt.Sprintf("config: %s", claudeJSONPath)}
+	default:
+		r.level = checkFail
+		r.summary = "doit MCP server is NOT registered"
+		r.details = []string{fmt.Sprintf("config: %s", claudeJSONPath)}
+		r.fix = "claude mcp add --scope user --transport stdio doit -- doit"
+	}
+	return r
+}
+
+func checkSiblingMCPServers(claudeJSONPath string) checkResult {
+	r := checkResult{
+		section:   "§3",
+		summary:   "Sibling MCP servers — user must audit for execution-adjacent primitives",
+		level:     checkInfo,
+		threatRef: "Threat model §3: doit is bypassed by any sibling MCP server that exposes shell, file-write+exec, language runtimes, or HTTP to localhost.",
+	}
+	siblings, err := listOtherMCPServers(claudeJSONPath)
+	if err != nil {
+		r.summary = "Sibling MCP servers — cannot enumerate"
+		r.details = []string{fmt.Sprintf("path: %s", claudeJSONPath), fmt.Sprintf("error: %v", err)}
+		return r
+	}
+	if len(siblings) == 0 {
+		r.summary = "No sibling MCP servers registered"
+		return r
+	}
+	r.details = []string{
+		fmt.Sprintf("%d sibling server(s) registered alongside doit:", len(siblings)),
+		"  " + strings.Join(siblings, ", "),
+		"Automated risk classification is tracked separately (🎯T34); audit manually for now.",
+	}
+	return r
+}
+
+func checkDangerousTier(cfg *config.Config) checkResult {
+	r := checkResult{
+		section:   "§4",
+		summary:   "Dangerous tier is disabled (default)",
+		threatRef: "Threat model §4: enabling the dangerous tier allows rm, chmod, and destructive git subcommands.",
+	}
+	if cfg != nil && cfg.Tiers.Dangerous {
+		r.level = checkWarn
+		r.summary = "Dangerous tier is ENABLED in config"
+		r.details = []string{"rm, chmod, and destructive git subcommands now run without per-command tier gating."}
+		r.fix = "set tiers.dangerous: false in ~/.config/doit/config.yaml (or remove the override)."
+	}
+	return r
+}
+
+func checkPolicyStorePermissions(eng *engine.Engine) checkResult {
+	r := checkResult{
+		section:   "§5",
+		summary:   "Policy-store directories are owner-writable only",
+		threatRef: "Threat model §5: untrusted write access to L1 rules or the L2 store defeats every policy decision.",
+	}
+	paths := []string{
+		filepath.Dir(config.ConfigPath()),
+		filepath.Dir(eng.StorePath()),
+	}
+	if dir := eng.StarlarkRulesDir(); dir != "" {
+		paths = append(paths, dir)
+	}
+
+	var writable []string
+	var details []string
+	for _, p := range uniqueStrings(paths) {
+		info, err := os.Stat(p)
+		if err != nil {
+			if os.IsNotExist(err) {
+				details = append(details, fmt.Sprintf("%s: (not yet created — owner will own on first write)", p))
+				continue
+			}
+			details = append(details, fmt.Sprintf("%s: stat error: %v", p, err))
+			continue
+		}
+		mode := info.Mode().Perm()
+		details = append(details, fmt.Sprintf("%s: mode %#o", p, mode))
+		if mode&0o022 != 0 { // group-write or world-write
+			writable = append(writable, p)
+		}
+	}
+	r.details = details
+	if len(writable) > 0 {
+		r.level = checkFail
+		r.summary = "Policy-store directories are writable by group or world"
+		r.fix = fmt.Sprintf("chmod 0700 %s", strings.Join(writable, " "))
+	}
+	return r
+}
+
+func checkL3Models(cfg *config.Config) checkResult {
+	r := checkResult{
+		section:   "§6",
+		summary:   "L3 models are at defaults (sonnet fast / opus deep)",
+		threatRef: "Threat model §6: a custom L3 model or claude binary may have different security properties.",
+	}
+	if cfg == nil {
+		return r
+	}
+	fast := cfg.Policy.Level3FastModel
+	deep := cfg.Policy.Level3Model
+	if fast == "" && deep == "" {
+		return r
+	}
+	r.level = checkInfo
+	r.summary = "L3 models are overridden in config"
+	if fast != "" {
+		r.details = append(r.details, fmt.Sprintf("level3_fast_model: %s", fast))
+	}
+	if deep != "" {
+		r.details = append(r.details, fmt.Sprintf("level3_model: %s", deep))
+	}
+	r.details = append(r.details, "Confirm the configured models still meet the safety properties the threat model assumes (Claude family, instruction-following).")
+	return r
+}
+
+func checkProjectConfig(cwd string) checkResult {
+	r := checkResult{
+		section:   "§7",
+		summary:   "No per-project .doit/config.yaml in current directory",
+		threatRef: "Threat model §7: project config is additive on top of global config — treat as code from a trusted source.",
+	}
+	if cwd == "" {
+		return r
+	}
+	path := config.ProjectConfigPath(cwd)
+	if _, err := os.Stat(path); err == nil {
+		r.level = checkInfo
+		r.summary = "Per-project .doit/config.yaml is present"
+		r.details = []string{fmt.Sprintf("path: %s", path), "Verify it comes from a trusted source before relying on doit's safety guarantees in this project."}
+	}
+	return r
+}
+
+// listOtherMCPServers walks the same nested mcpServers structure as
+// checkDoitRegistered but returns every server name except doit itself.
+func listOtherMCPServers(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil, fmt.Errorf("invalid JSON: %w", err)
+	}
+	seen := map[string]bool{}
+	collectMCPServerNames(root, seen)
+	delete(seen, "doit")
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+func collectMCPServerNames(obj map[string]json.RawMessage, out map[string]bool) {
+	if raw, ok := obj["mcpServers"]; ok {
+		var servers map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &servers); err == nil {
+			for name := range servers {
+				out[name] = true
+			}
+		}
+	}
+	for _, v := range obj {
+		var nested map[string]json.RawMessage
+		if err := json.Unmarshal(v, &nested); err == nil {
+			collectMCPServerNames(nested, out)
+		}
+	}
+}
+
+func uniqueStrings(in []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
 }
 
 // checkBashDenied reads settings.json and returns true if "Bash" appears in

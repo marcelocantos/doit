@@ -946,6 +946,14 @@ func (e *Engine) AuditPath() string {
 	return e.cfg.Audit.Path
 }
 
+// Config returns the merged configuration the engine is operating under.
+// The threat-model-driven check_config consumer needs to inspect tier and
+// L3 model settings; exposing the whole config keeps the engine the single
+// source of truth without forcing callers to re-load YAML.
+func (e *Engine) Config() *config.Config {
+	return e.cfg
+}
+
 // StorePath returns the L2 policy store path.
 func (e *Engine) StorePath() string {
 	return e.storePath

@@ -229,9 +229,12 @@ against what actually happens during the session.
 ## Configuration Assumptions
 
 The safety model depends on the following being true. `doit_check_config`
-verifies the first two items; the rest are the user's responsibility.
+reports the state of every numbered item below — `[FAIL]` for §1–§2 when the
+contractual settings are missing, and `[INFO]` / `[WARN]` for §3–§7 where doit
+can observe state but cannot judge intent. Run it after installation and after
+any settings change.
 
-### Verified by `doit_check_config`
+### Asserted by `doit_check_config` (FAIL on absence)
 
 1. **`Bash` is in the deny list** in `~/.claude/settings.json` (user scope)
    or `.claude/settings.json` (project scope). Without this, Claude Code's
@@ -242,10 +245,7 @@ verifies the first two items; the rest are the user's responsibility.
    registration, `doit_execute` is not available to the agent and the user
    has no gatekeeper.
 
-Run `doit_check_config` after installation and after any settings change to
-verify both conditions.
-
-### User's responsibility (not verified automatically)
+### Reported by `doit_check_config` (user's responsibility to interpret)
 
 3. **No other MCP servers with unconstrained execution paths are registered**
    for the same session. See [Limits](#what-doit-does-not-defend-against) §1.
@@ -317,10 +317,10 @@ targets in `docs/targets.yaml`.
   Extending the gate to cover inline strings and other interpreters would close
   this gap, but makes the UX significantly heavier.
 
-- **MCP server inventory check.** `doit_check_config` verifies Bash is denied
-  and doit is registered, but does not enumerate other MCP servers or flag
-  potentially dangerous ones. A future iteration could parse `~/.claude.json`
-  for known execution-adjacent server names and warn.
+- **MCP server inventory check.** `doit_check_config` enumerates sibling MCP
+  servers (§3) but does not yet classify them by risk. Automated detection of
+  known execution-adjacent server names and a STARTUP-time warning are tracked
+  separately as 🎯T34.
 
 - **L3 prompt injection hardening.** The L3 prompt does not sanitise or escape
   the command string, justification, or safety argument. Adding a structural

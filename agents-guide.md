@@ -25,7 +25,11 @@ Place this in `.claude/settings.json` (project scope) or `~/.claude/settings.jso
 Bash as the execution path — with policy enforcement, audit logging, and
 interactive escalation built in.
 
-Use `doit_check_config` to verify that Bash is denied and doit is registered.
+Use `doit_check_config` to verify the deployed configuration against the
+threat-model safety contract — every load-bearing setting (Bash denial, doit
+registration, dangerous-tier state, policy-store permissions, L3 model choice,
+sibling MCP servers, project-config presence) is reported with its safety-model
+interpretation, with WARN/FAIL flagged distinctly from informational items.
 
 ---
 
@@ -76,7 +80,7 @@ interface for command execution.
 
 | Tool | Purpose |
 |---|---|
-| `doit_check_config` | Verify deployment config (Bash denied, doit registered) |
+| `doit_check_config` | Verify deployment config against the threat-model safety contract (every load-bearing setting reported with its safety-model interpretation; weakened-from-default settings flagged distinctly from informational items) |
 | `doit_repo_read` | Read an allowlisted project file (`.gitignore`, `Makefile`, `go.mod`, `package.json`, `Cargo.toml`, `pyproject.toml`, `CLAUDE.md`, `.doit/config.yaml`) for claim verification during L3 reasoning |
 
 ## Work sessions

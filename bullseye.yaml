@@ -589,7 +589,7 @@ targets:
     achieved: 2026-04-25
   T33:
     name: doit_check_config surfaces every threat-model-named load-bearing config knob
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     observable: true
@@ -603,6 +603,7 @@ targets:
     context: 'The threat model that just landed (🎯T32, docs/threat-model.md) names a set of configuration choices the safety guarantees depend on. Today, doit_check_config reports the raw config but doesn''t draw the line between ''this knob is set to X'' and ''because of X, the safety model assumes Y''. For an operator preparing for 1.0, that gap means the threat model is documentation-only — there''s no runtime check that the deployed config still matches the assumptions the document was written against. This target closes the loop: every load-bearing setting the threat model names should be observable in doit_check_config with its safety-model interpretation. Pre-1.0 priority because once 1.0 ships the assumptions become contractual.'
     origin: manual
     discovered: 2026-04-25
+    achieved: 2026-04-25
   T34:
     name: STARTUP warns when sibling MCP servers expose execution-adjacent primitives
     status: identified

@@ -96,7 +96,7 @@ automatically.
 
 | Tool | Purpose |
 |---|---|
-| `doit_check_config` | Verify deployment config (Bash denied, doit registered) |
+| `doit_check_config` | Verify deployment config against the threat-model safety contract (every load-bearing setting reported with its safety-model interpretation) |
 | `doit_repo_read` | Read an allowlisted project file for L3 claim verification |
 
 Commands are passed as shell strings and executed via `sh -c`, so shell
@@ -281,9 +281,14 @@ as an MCP server, agents must route all command execution through
 `doit_execute` — where every invocation is evaluated by the policy engine and
 recorded in the audit log.
 
-Once configured, use `doit_check_config` to verify that:
-- `Bash` is in the deny list in `~/.claude/settings.json`
-- The doit MCP server is registered in `~/.claude.json`
+Once configured, use `doit_check_config` to verify the deployment against the
+[threat-model safety contract](docs/threat-model.md#configuration-assumptions).
+The check reports each load-bearing setting with its safety-model interpretation:
+- `Bash` deny-list entry (§1) and doit MCP registration (§2) — `[FAIL]` if missing
+- Sibling MCP servers (§3), dangerous-tier state (§4), policy-store permissions
+  (§5), L3 model overrides (§6), and per-project config presence (§7) — reported
+  with `[OK]` / `[INFO]` / `[WARN]` so weakened settings stand out from items the
+  threat model labels "user's responsibility"
 
 ## Agent integration
 
