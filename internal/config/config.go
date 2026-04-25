@@ -25,14 +25,15 @@ type Config struct {
 
 // PolicyConfig controls the policy engine.
 type PolicyConfig struct {
-	Level1Enabled    bool   `yaml:"level1_enabled"`
-	Level2Enabled    bool   `yaml:"level2_enabled"`
-	Level2Path       string `yaml:"level2_path,omitempty"`
-	Level3Enabled    bool   `yaml:"level3_enabled"`
-	Level3FastModel  string `yaml:"level3_fast_model,omitempty"`  // fast triage model (default: sonnet)
-	Level3Model      string `yaml:"level3_model,omitempty"`       // deep reasoning model (default: opus)
-	Level3Timeout    string `yaml:"level3_timeout,omitempty"`
-	StarlarkRulesDir string `yaml:"starlark_rules_dir,omitempty"`
+	Level1Enabled              bool     `yaml:"level1_enabled"`
+	Level2Enabled              bool     `yaml:"level2_enabled"`
+	Level2Path                 string   `yaml:"level2_path,omitempty"`
+	Level3Enabled              bool     `yaml:"level3_enabled"`
+	Level3FastModel            string   `yaml:"level3_fast_model,omitempty"`            // fast triage model (default: sonnet)
+	Level3Model                string   `yaml:"level3_model,omitempty"`                 // deep reasoning model (default: opus)
+	Level3Timeout              string   `yaml:"level3_timeout,omitempty"`
+	StarlarkRulesDir           string   `yaml:"starlark_rules_dir,omitempty"`
+	AcknowledgedSiblingServers []string `yaml:"acknowledged_sibling_servers,omitempty"` // suppresses startup warning per server
 }
 
 // DefaultLevel3Timeout is used when no level3_timeout is configured.
