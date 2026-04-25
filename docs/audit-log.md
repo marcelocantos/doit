@@ -116,7 +116,7 @@ maintenance activities. Append-only — newest entries at the bottom.
 
 ## 2026-04-26 — /release v0.9.0
 
-- **Commit**: `pending`
+- **Commit**: `aac5940`
 - **Outcome**: Released v0.9.0 (darwin-arm64, linux-amd64, linux-arm64).
   Postmortem-tooling release — the audit log now captures every signal
   needed to reconstruct *why* doit made a decision, and `doit_audit_query`
