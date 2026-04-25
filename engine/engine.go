@@ -72,6 +72,7 @@ type Result struct {
 	PolicyReason   string
 	PolicyRuleID   string
 	EscalateToken  string // non-empty when policy escalated, token for approval
+	AuditSeq       uint64 // seq number of the audit entry written for this execution (0 if no audit)
 }
 
 // EvalResult is returned by Evaluate (dry-run, no execution).
@@ -681,7 +682,7 @@ func (e *Engine) runScriptCommand(ctx context.Context, req Request, sg scriptGat
 		if req.ExpectedDurationSeconds > 0 {
 			opts.ExpectedDuration = float64(req.ExpectedDurationSeconds) * 1000.0
 		}
-		_ = e.logger.Log(cmdStr, []string{sg.Invocation.Interpreter}, []string{"script"}, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
+		_, _ = e.logger.Log(cmdStr, []string{sg.Invocation.Interpreter}, []string{"script"}, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
 	}
 	return exitCode
 }
@@ -701,7 +702,7 @@ func (e *Engine) logScriptEvent(req Request, decision, ruleID, hash, scriptPath,
 		ScriptHash:    hash,
 		ScriptPath:    scriptPath,
 	}
-	_ = e.logger.Log(req.Command, nil, nil, exitCode, reason, 0, req.Cwd, req.Retry, opts)
+	_, _ = e.logger.Log(req.Command, nil, nil, exitCode, reason, 0, req.Cwd, req.Retry, opts)
 }
 
 // Execute evaluates policy and, if allowed, runs the command via sh -c.
@@ -770,7 +771,7 @@ func (e *Engine) Execute(ctx context.Context, req Request) *Result {
 
 	// Execute the command.
 	var stdoutBuf, stderrBuf bytes.Buffer
-	exitCode := e.runCommand(ctx, args, req, &stdoutBuf, &stderrBuf)
+	exitCode, auditSeq := e.runCommand(ctx, args, req, &stdoutBuf, &stderrBuf)
 
 	if wasL3 {
 		go e.tryPromote()
@@ -780,6 +781,7 @@ func (e *Engine) Execute(ctx context.Context, req Request) *Result {
 		ExitCode: exitCode,
 		Stdout:   stdoutBuf.String(),
 		Stderr:   stderrBuf.String(),
+		AuditSeq: auditSeq,
 	}
 	if pResult != nil {
 		res.PolicyLevel = pResult.Level
@@ -852,13 +854,13 @@ func (e *Engine) ExecuteStreaming(ctx context.Context, req Request, stdout, stde
 		})
 	}
 
-	exitCode := e.runCommand(ctx, args, req, stdout, stderr)
+	exitCode, auditSeq := e.runCommand(ctx, args, req, stdout, stderr)
 
 	if wasL3 {
 		go e.tryPromote()
 	}
 
-	res := &Result{ExitCode: exitCode}
+	res := &Result{ExitCode: exitCode, AuditSeq: auditSeq}
 	if pResult != nil {
 		res.PolicyLevel = pResult.Level
 		res.PolicyDecision = pResult.Decision.String()
@@ -1020,7 +1022,7 @@ func (e *Engine) ApproveScript(hash, pathHint, justification string) (*script.Ap
 			ScriptHash:    hash,
 			ScriptPath:    pathHint,
 		}
-		_ = e.logger.Log("<script-approval>", []string{"script"}, []string{"script"}, 0, "", 0, "", false, opts)
+		_, _ = e.logger.Log("<script-approval>", []string{"script"}, []string{"script"}, 0, "", 0, "", false, opts)
 	}
 	return entry, nil
 }
@@ -1038,7 +1040,7 @@ func (e *Engine) RevokeScriptApproval(hash string) error {
 			PolicyRuleID: "script-hash-revoked",
 			ScriptHash:   hash,
 		}
-		_ = e.logger.Log("<script-revocation>", []string{"script"}, []string{"script"}, 0, "", 0, "", false, opts)
+		_, _ = e.logger.Log("<script-revocation>", []string{"script"}, []string{"script"}, 0, "", 0, "", false, opts)
 	}
 	return nil
 }
@@ -1097,6 +1099,23 @@ func (e *Engine) SelfAudit() ([]policy.AuditFinding, error) {
 // root was set or discovery has not been run.
 func (e *Engine) ProjectContext() *doitctx.ProjectContext {
 	return e.projectCtx
+}
+
+// LogElicitationEntry writes an elicitation audit entry (Phase 1 or Phase 2)
+// to the audit chain. Returns the assigned sequence number. The parentSeq
+// field in opts should be set to the AuditSeq of the originating command entry
+// so postmortem can reconstruct the elicitation → promotion → future-decisions
+// chain.
+func (e *Engine) LogElicitationEntry(opts *audit.LogOptions) (uint64, error) {
+	if e.logger == nil {
+		return 0, nil
+	}
+	pipeline := "<elicitation>"
+	if opts.ProposedRuleSource != "" {
+		pipeline = "<elicitation-promotion>"
+	}
+	seq, err := e.logger.Log(pipeline, nil, nil, 0, "", 0, "", false, opts)
+	return seq, err
 }
 
 // RecordDecision adds a learned policy entry (L2) for a specific command
@@ -1568,7 +1587,7 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 	return result, segments, tiers, l3ev
 }
 
-func (e *Engine) runCommand(ctx context.Context, args []string, req Request, stdout, stderr io.Writer) int {
+func (e *Engine) runCommand(ctx context.Context, args []string, req Request, stdout, stderr io.Writer) (int, uint64) {
 	return e.runShellCommand(ctx, args, req, stdout, stderr)
 }
 
@@ -1576,7 +1595,7 @@ func (e *Engine) runCommand(ctx context.Context, args []string, req Request, std
 // When args is non-empty, they are joined to form the command string.
 // Honours req.TimeoutSeconds: when > 0, the process is killed on expiry
 // via context cancellation.
-func (e *Engine) runShellCommand(ctx context.Context, args []string, req Request, stdout, stderr io.Writer) int {
+func (e *Engine) runShellCommand(ctx context.Context, args []string, req Request, stdout, stderr io.Writer) (int, uint64) {
 	cmdStr := req.Command
 	if len(args) > 0 {
 		cmdStr = strings.Join(args, " ")
@@ -1624,8 +1643,8 @@ func (e *Engine) runShellCommand(ctx context.Context, args []string, req Request
 		}
 	}
 
-	e.logExecution(ctx, cmdStr, nil, nil, exitCode, errMsg, duration, req, timedOut)
-	return exitCode
+	seq := e.logExecution(ctx, cmdStr, nil, nil, exitCode, errMsg, duration, req, timedOut)
+	return exitCode, seq
 }
 
 // timeoutExitCode is returned when doit kills a process after its
@@ -1642,9 +1661,9 @@ func withTimeoutIfSet(ctx context.Context, seconds int) (context.Context, contex
 	return context.WithTimeout(ctx, time.Duration(seconds)*time.Second)
 }
 
-func (e *Engine) logExecution(ctx context.Context, cmdStr string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, req Request, timedOut bool) {
+func (e *Engine) logExecution(ctx context.Context, cmdStr string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, req Request, timedOut bool) uint64 {
 	if e.logger == nil {
-		return
+		return 0
 	}
 	opts := &audit.LogOptions{}
 	if info := policy.EvalFromContext(ctx); info != nil {
@@ -1663,7 +1682,8 @@ func (e *Engine) logExecution(ctx context.Context, cmdStr string, segments, tier
 	}
 	opts.TimedOut = timedOut
 	opts.ProjectRoot = e.projectRoot
-	_ = e.logger.Log(cmdStr, segments, tiers, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
+	seq, _ := e.logger.Log(cmdStr, segments, tiers, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
+	return seq
 }
 
 func (e *Engine) logPolicyResult(req Request, args []string, result *policy.Result, segments, tiers []string, exitCode int, l3ev *policy.CascadeEvidence) {
@@ -1681,7 +1701,7 @@ func (e *Engine) logPolicyResult(req Request, args []string, result *policy.Resu
 		opts.L3Fast = l3ev.Fast
 		opts.L3Deep = l3ev.Deep
 	}
-	_ = e.logger.Log(
+	_, _ = e.logger.Log(
 		strings.Join(args, " "),
 		segments, tiers,
 		exitCode, result.Reason,

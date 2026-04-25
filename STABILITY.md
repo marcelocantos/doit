@@ -68,7 +68,7 @@ Snapshot as of v0.8.0.
 | `Engine.PolicyStatus()` | `map[string]any` | Stable |
 | `Request` struct | Command, Args, Justification, SafetyArg, Cwd, Env, Approved, Retry, TimeoutSeconds, ExpectedDurationSeconds | Stable |
 | `policy.Request` struct | Command, Cwd, Retry, Justification, SafetyArg, ProjectType, TimeoutSeconds, ExpectedDurationSeconds | Stable |
-| `Result` struct | ExitCode, Stdout, Stderr, PolicyLevel, PolicyDecision, PolicyReason, PolicyRuleID, EscalateToken | Stable |
+| `Result` struct | ExitCode, Stdout, Stderr, PolicyLevel, PolicyDecision, PolicyReason, PolicyRuleID, EscalateToken, AuditSeq | Stable |
 | `EvalResult` struct | Decision, Level, Reason, RuleID, Bypassable, ScriptApproval | Stable |
 | `ScriptApprovalRequest` struct | Interpreter, Path, ContentHash, ContentPreview, SizeBytes | Needs review |
 | `Engine.ApproveScript(hash, pathHint, justification)` | `(*script.Approval, error)` | Needs review |
@@ -80,6 +80,7 @@ Snapshot as of v0.8.0.
 | `Engine.ListCapabilities()` | `[]CapabilityInfo` | Stable |
 | `Engine.AuditPath()` | `string` | Stable |
 | `Engine.RecordDecision(command, decision)` | `error` | Fluid |
+| `Engine.LogElicitationEntry(opts)` | `(uint64, error)` | Fluid |
 | `Engine.ProposeRules(command, decision)` | `[]RuleProposal` | Fluid |
 | `Engine.WriteStarlarkRule(ruleID, source)` | `error` | Fluid |
 | `Engine.StartSession(scope, description, timeout)` | `(id string, error)` | Needs review |
@@ -95,6 +96,13 @@ Snapshot as of v0.8.0.
 | Phase 1 (decision) | Policy escalation or bypassable deny | Allow once, Allow always, Deny, Deny always | Stable |
 | Phase 2 (promotion) | "Always" choice in Phase 1 | Starlark rules at narrow/moderate/broad generality, or decline | Fluid |
 | Script approval | Unapproved shell-script invocation detected | approve, deny | Needs review |
+
+Each MCP elicitation interaction produces its own audit-chain entry (distinct from the command's audit entry) with `policy_result` set to the user's choice:
+
+- Phase 1 `policy_result` values: `allow_once`, `allow_always`, `deny_once`, `deny_always`
+- Phase 2 `policy_result` values: `proposal_accepted`, `proposal_declined`
+
+The `pipeline` field is `<elicitation>` for Phase 1 entries and `<elicitation-promotion>` for Phase 2 entries. All elicitation entries set `parent_seq` to the `seq` of the originating command's audit entry. The `elicitation_latency_ms` field records wall-clock time between prompt presentation and response (Phase 1 only).
 
 ### CLI flags (MCP server binary)
 
@@ -192,6 +200,13 @@ collapses the cascade to a single-tier.
 | Timed out | `timed_out` | bool (omitempty) | Needs review |
 | L3 fast-tier evidence | `l3_fast` | L3Evidence object (omitempty) | Needs review |
 | L3 deep-tier evidence | `l3_deep` | L3Evidence object (omitempty) | Needs review |
+| Parent sequence | `parent_seq` | uint64 (omitempty) | Needs review |
+| Elicitation prompt | `elicitation_prompt` | string (omitempty) | Needs review |
+| Elicitation choice | `elicitation_choice` | string (omitempty) | Needs review |
+| Elicitation latency | `elicitation_latency_ms` | float64 (omitempty) | Needs review |
+| Proposed rule source | `proposed_rule_source` | string (omitempty) | Needs review |
+| Proposed rule generality | `proposed_rule_generality` | string (omitempty) | Needs review |
+| Proposed rule ID | `proposed_rule_id` | string (omitempty) | Needs review |
 | Entry hash | `hash` | string (hex SHA-256) | Stable |
 
 **L3Evidence object** (nested within `l3_fast` / `l3_deep`):

@@ -272,7 +272,10 @@ func handleExecute(srv *server.MCPServer, eng *engine.Engine) server.ToolHandler
 
 		if evalResult.Decision == "escalate" || evalResult.Decision == "deny" {
 			if evalResult.Bypassable || evalResult.Decision == "escalate" {
+				prompt := buildElicitationPrompt(command, evalResult)
+				t0 := time.Now()
 				decision, err := elicitPolicyDecision(ctx, srv, command, evalResult)
+				latencyMs := float64(time.Since(t0).Microseconds()) / 1000.0
 				if err != nil {
 					// Elicitation not supported or failed — fall through to
 					// normal execution which will return the denial.
@@ -282,18 +285,45 @@ func handleExecute(srv *server.MCPServer, eng *engine.Engine) server.ToolHandler
 				switch decision {
 				case "allow_once":
 					r.Retry = true
-					return executeAndRespond(ctx, eng, r)
+					result := eng.Execute(ctx, r)
+					eng.LogElicitationEntry(&audit.LogOptions{ //nolint:errcheck
+						PolicyResult:         "allow_once",
+						ParentSeq:            result.AuditSeq,
+						ElicitationPrompt:    prompt,
+						ElicitationChoice:    "allow_once",
+						ElicitationLatencyMs: latencyMs,
+					})
+					return buildResult(result), nil
 				case "allow_always":
 					r.Retry = true
 					result := eng.Execute(ctx, r)
 					_ = eng.RecordDecision(command, "allow")
-					elicitRulePromotion(ctx, srv, eng, command, "allow")
+					eng.LogElicitationEntry(&audit.LogOptions{ //nolint:errcheck
+						PolicyResult:         "allow_always",
+						ParentSeq:            result.AuditSeq,
+						ElicitationPrompt:    prompt,
+						ElicitationChoice:    "allow_always",
+						ElicitationLatencyMs: latencyMs,
+					})
+					elicitRulePromotion(ctx, srv, eng, command, "allow", result.AuditSeq)
 					return buildResult(result), nil
 				case "deny":
+					eng.LogElicitationEntry(&audit.LogOptions{ //nolint:errcheck
+						PolicyResult:         "deny_once",
+						ElicitationPrompt:    prompt,
+						ElicitationChoice:    "deny_once",
+						ElicitationLatencyMs: latencyMs,
+					})
 					return mcp.NewToolResultError(fmt.Sprintf("Denied by user: %s", command)), nil
 				case "deny_always":
+					eng.LogElicitationEntry(&audit.LogOptions{ //nolint:errcheck
+						PolicyResult:         "deny_always",
+						ElicitationPrompt:    prompt,
+						ElicitationChoice:    "deny_always",
+						ElicitationLatencyMs: latencyMs,
+					})
 					_ = eng.RecordDecision(command, "deny")
-					elicitRulePromotion(ctx, srv, eng, command, "deny")
+					elicitRulePromotion(ctx, srv, eng, command, "deny", 0)
 					return mcp.NewToolResultError(fmt.Sprintf("Denied by user (permanent): %s", command)), nil
 				}
 			}
@@ -353,14 +383,22 @@ func elicitScriptApproval(ctx context.Context, srv *server.MCPServer, info *engi
 	return decision == "approve", nil
 }
 
+// buildElicitationPrompt constructs the prompt text shown to the user for a
+// policy escalation/denial, used both for the MCP elicitation message and for
+// the audit log's elicitation_prompt field.
+func buildElicitationPrompt(command string, eval *engine.EvalResult) string {
+	msg := fmt.Sprintf("Policy %s for command: %s\n\nLevel: L%d\nReason: %s",
+		eval.Decision, command, eval.Level, eval.Reason)
+	if eval.RuleID != "" {
+		msg += fmt.Sprintf("\nRule: %s", eval.RuleID)
+	}
+	return msg
+}
+
 // elicitPolicyDecision presents a policy escalation to the user via MCP
 // elicitation and returns their choice.
 func elicitPolicyDecision(ctx context.Context, srv *server.MCPServer, command string, eval *engine.EvalResult) (string, error) {
-	message := fmt.Sprintf("Policy %s for command: %s\n\nLevel: L%d\nReason: %s",
-		eval.Decision, command, eval.Level, eval.Reason)
-	if eval.RuleID != "" {
-		message += fmt.Sprintf("\nRule: %s", eval.RuleID)
-	}
+	message := buildElicitationPrompt(command, eval)
 
 	result, err := srv.RequestElicitation(ctx, mcp.ElicitationRequest{
 		Params: mcp.ElicitationParams{
@@ -401,7 +439,8 @@ func elicitPolicyDecision(ctx context.Context, srv *server.MCPServer, command st
 // elicitRulePromotion fires phase 2 elicitation: propose Starlark rules at
 // varying generality levels for the user to choose from. Non-blocking — errors
 // are silently ignored (the command decision has already been recorded in L2).
-func elicitRulePromotion(ctx context.Context, srv *server.MCPServer, eng *engine.Engine, command, decision string) {
+// parentSeq links this Phase 2 entry back to the originating command's audit entry.
+func elicitRulePromotion(ctx context.Context, srv *server.MCPServer, eng *engine.Engine, command, decision string, parentSeq uint64) {
 	proposals := eng.ProposeRules(command, decision)
 	if len(proposals) == 0 {
 		return
@@ -414,9 +453,10 @@ func elicitRulePromotion(ctx context.Context, srv *server.MCPServer, eng *engine
 	}
 	options = append(options, "No rule — just remember this command")
 
+	promotionPrompt := fmt.Sprintf("Would you like to create a permanent rule for `%s`?", command)
 	result, err := srv.RequestElicitation(ctx, mcp.ElicitationRequest{
 		Params: mcp.ElicitationParams{
-			Message: fmt.Sprintf("Would you like to create a permanent rule for `%s`?", command),
+			Message: promotionPrompt,
 			RequestedSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -431,11 +471,23 @@ func elicitRulePromotion(ctx context.Context, srv *server.MCPServer, eng *engine
 		},
 	})
 	if err != nil || result.Action != mcp.ElicitationResponseActionAccept {
+		eng.LogElicitationEntry(&audit.LogOptions{ //nolint:errcheck
+			PolicyResult:      "proposal_declined",
+			ParentSeq:         parentSeq,
+			ElicitationPrompt: promotionPrompt,
+			ElicitationChoice: "proposal_declined",
+		})
 		return
 	}
 
 	data, ok := result.Content.(map[string]any)
 	if !ok {
+		eng.LogElicitationEntry(&audit.LogOptions{ //nolint:errcheck
+			PolicyResult:      "proposal_declined",
+			ParentSeq:         parentSeq,
+			ElicitationPrompt: promotionPrompt,
+			ElicitationChoice: "proposal_declined",
+		})
 		return
 	}
 	chosen, _ := data["rule"].(string)
@@ -444,12 +496,31 @@ func elicitRulePromotion(ctx context.Context, srv *server.MCPServer, eng *engine
 	for _, p := range proposals {
 		if p.Description == chosen {
 			ruleID := fmt.Sprintf("user-%s-%d", decision, time.Now().UnixMilli())
-			if err := eng.WriteStarlarkRule(ruleID, p.Source); err != nil {
-				log.Printf("doit: write starlark rule: %v", err)
+			writeErr := eng.WriteStarlarkRule(ruleID, p.Source)
+			if writeErr != nil {
+				log.Printf("doit: write starlark rule: %v", writeErr)
+				ruleID = ""
 			}
+			eng.LogElicitationEntry(&audit.LogOptions{ //nolint:errcheck
+				PolicyResult:           "proposal_accepted",
+				ParentSeq:              parentSeq,
+				ElicitationPrompt:      promotionPrompt,
+				ElicitationChoice:      "proposal_accepted",
+				ProposedRuleSource:     p.Source,
+				ProposedRuleGenerality: p.Generality,
+				ProposedRuleID:         ruleID,
+			})
 			return
 		}
 	}
+
+	// User selected "No rule — just remember this command".
+	eng.LogElicitationEntry(&audit.LogOptions{ //nolint:errcheck
+		PolicyResult:      "proposal_declined",
+		ParentSeq:         parentSeq,
+		ElicitationPrompt: promotionPrompt,
+		ElicitationChoice: "proposal_declined",
+	})
 }
 
 func executeAndRespond(ctx context.Context, eng *engine.Engine, r engine.Request) (*mcp.CallToolResult, error) {
