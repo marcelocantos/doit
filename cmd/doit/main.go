@@ -13,11 +13,13 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/marcelocantos/doit"
 	"github.com/marcelocantos/doit/engine"
+	"github.com/marcelocantos/doit/internal/mcpinventory"
 	"github.com/marcelocantos/doit/mcptools"
 )
 
@@ -80,6 +82,19 @@ func run() int {
 		return 1
 	}
 	defer eng.Close()
+
+	// Emit a STARTUP warning for any unacknowledged risky sibling MCP servers.
+	// This runs before tools register so the warning lands in the agent's context
+	// immediately. We write to stderr because log output is discarded above.
+	home, _ := os.UserHomeDir()
+	claudeJSONPath := filepath.Join(home, ".claude.json")
+	var acknowledged []string
+	if cfg := eng.Config(); cfg != nil {
+		acknowledged = cfg.Policy.AcknowledgedSiblingServers
+	}
+	mcpinventory.WarnAboutSiblings(claudeJSONPath, acknowledged, func(msg string) {
+		fmt.Fprintf(os.Stderr, "%s\n", msg)
+	})
 
 	srv := server.NewMCPServer("doit", version, server.WithElicitation())
 	mcptools.Register(srv, eng)

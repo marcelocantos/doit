@@ -249,6 +249,10 @@ any settings change.
 
 3. **No other MCP servers with unconstrained execution paths are registered**
    for the same session. See [Limits](#what-doit-does-not-defend-against) §1.
+   doit emits a STARTUP warning for any registered sibling that matches a
+   known-risky name pattern. Suppress per-server with
+   `policy.acknowledged_sibling_servers` in `~/.config/doit/config.yaml`
+   once you have consciously accepted the risk.
 
 4. **The `dangerous` tier remains disabled** (`tiers.dangerous: false`, the
    default) unless the user has explicitly decided to enable it. Enabling the
@@ -318,9 +322,9 @@ targets in `docs/targets.yaml`.
   this gap, but makes the UX significantly heavier.
 
 - **MCP server inventory check.** `doit_check_config` enumerates sibling MCP
-  servers (§3) but does not yet classify them by risk. Automated detection of
-  known execution-adjacent server names and a STARTUP-time warning are tracked
-  separately as 🎯T34.
+  servers (§3) and classifies known-risky names. A STARTUP warning fires for
+  any unacknowledged risky sibling. Operators can suppress per-server via
+  `policy.acknowledged_sibling_servers` in `~/.config/doit/config.yaml`.
 
 - **L3 prompt injection hardening.** The L3 prompt does not sanitise or escape
   the command string, justification, or safety argument. Adding a structural

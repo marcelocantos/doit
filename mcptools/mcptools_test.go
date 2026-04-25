@@ -15,6 +15,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/marcelocantos/doit/engine"
+	"github.com/marcelocantos/doit/internal/mcpinventory"
 )
 
 func TestRegister_AddsTools(t *testing.T) {
@@ -251,6 +252,68 @@ func TestCheckConfig_ProjectConfigPresent(t *testing.T) {
 	}
 	if !strings.Contains(out, "Per-project .doit/config.yaml is present") {
 		t.Errorf("expected project-config summary, got:\n%s", out)
+	}
+}
+
+// --- startup sibling-warning integration tests ---
+
+func writeClaudeJSONForTest(t *testing.T, dir string, servers map[string]any) string {
+	t.Helper()
+	data, err := json.Marshal(map[string]any{"mcpServers": servers})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	path := filepath.Join(dir, ".claude.json")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	return path
+}
+
+func TestStartupWarning_NoSiblings_NoWarning(t *testing.T) {
+	dir := t.TempDir()
+	path := writeClaudeJSONForTest(t, dir, map[string]any{
+		"doit": map[string]any{"command": "doit"},
+	})
+
+	var warnings []string
+	mcpinventory.WarnAboutSiblings(path, nil, func(msg string) { warnings = append(warnings, msg) })
+
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings with no siblings, got: %v", warnings)
+	}
+}
+
+func TestStartupWarning_KnownRiskySibling_Warns(t *testing.T) {
+	dir := t.TempDir()
+	path := writeClaudeJSONForTest(t, dir, map[string]any{
+		"doit":       map[string]any{"command": "doit"},
+		"filesystem": map[string]any{"command": "npx", "args": []string{"-y", "@modelcontextprotocol/server-filesystem"}},
+	})
+
+	var warnings []string
+	mcpinventory.WarnAboutSiblings(path, nil, func(msg string) { warnings = append(warnings, msg) })
+
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning for risky sibling, got %d: %v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "filesystem") {
+		t.Errorf("expected warning to mention 'filesystem', got:\n%s", warnings[0])
+	}
+}
+
+func TestStartupWarning_AcknowledgedSibling_NoWarning(t *testing.T) {
+	dir := t.TempDir()
+	path := writeClaudeJSONForTest(t, dir, map[string]any{
+		"doit":       map[string]any{"command": "doit"},
+		"filesystem": map[string]any{"command": "npx"},
+	})
+
+	var warnings []string
+	mcpinventory.WarnAboutSiblings(path, []string{"filesystem"}, func(msg string) { warnings = append(warnings, msg) })
+
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings when sibling is acknowledged, got: %v", warnings)
 	}
 }
 
