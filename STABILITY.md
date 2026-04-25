@@ -5,7 +5,7 @@ breaking changes to the public API, MCP interface, configuration format,
 audit log format, or Starlark rule contract will require a major version
 bump. The pre-1.0 period exists to get these right.
 
-Snapshot as of v0.8.0.
+Snapshot as of v0.9.0.
 
 ## Interaction surface catalogue
 
@@ -357,6 +357,16 @@ built-in capability is currently marked sensitive.
   sibling MCP servers expose execution-adjacent primitives, suppressible via
   `policy.acknowledged_sibling_servers` (v0.8.0 — 🎯T34). Document review pre-1.0
   is still required, but the runtime affordances are now in place.
+
+- **Postmortem tooling complete**: The audit log captures L3 chain-of-evidence
+  (rendered prompt, model response, latency, decision — v0.9.0 🎯T37),
+  elicitation outcomes and L2 promotions with `parent_seq` linkage (v0.9.0 🎯T36),
+  and stdout/stderr excerpts for failure-mode commands with a forward-compatible
+  `RedactOutput()` capability flag (v0.9.0 🎯T39). The new `doit_audit_query`
+  MCP tool provides filter-based postmortem lookup with a `latest=true`
+  shortcut for the common "what did doit just refuse" query (v0.9.0 🎯T38).
+  Field-level annotations remain `Needs review` until the schema settles
+  through real-world use.
 
 - **Third-party attribution (NOTICES)**: doit's binary distributions transitively
   link Go-module dependencies (`gopkg.in/yaml.v3`, `go.starlark.net`,
