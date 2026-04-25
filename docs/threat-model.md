@@ -85,11 +85,11 @@ removed from `~/.config/doit/config.yaml`.
 
 ### 3. Dangerous-tier capabilities (disabled by default)
 
-Four capabilities are in the `dangerous` tier and are disabled by default:
-`rm`, `chmod`, and the destructive git subcommands (`push`, `reset`, `clean`,
-`stash`). An agent cannot invoke these without the user explicitly enabling
-the `dangerous` tier in config, or the user approving via elicitation when
-the capability is already enabled.
+The `dangerous` tier is disabled by default and gates `rm`, `chmod`, and
+the destructive git subcommands (`push --force`, `reset --hard`, `clean
+-fd`, `stash drop`). An agent cannot invoke these without the user
+explicitly enabling the `dangerous` tier in config, or the user approving
+via elicitation when the capability is already enabled.
 
 ### 4. Unrecognised commands (policy escalation)
 
