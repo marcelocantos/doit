@@ -147,6 +147,140 @@ func TestApprove_NoTokenStore(t *testing.T) {
 	}
 }
 
+func TestCheckConfig_BaselineProducesNoWarnings(t *testing.T) {
+	dir := t.TempDir()
+
+	settings := filepath.Join(dir, "settings.json")
+	os.WriteFile(settings, []byte(`{"permissions":{"deny":["Bash"]}}`), 0600)
+
+	claudeJSON := filepath.Join(dir, ".claude.json")
+	os.WriteFile(claudeJSON, []byte(`{"mcpServers":{"doit":{"command":"doit"}}}`), 0600)
+
+	eng := newTestEngineWithDangerous(t, false)
+	out := runCheckConfigWith(t, eng, settings, claudeJSON, dir)
+
+	for _, section := range []string{"§1", "§2", "§3", "§4", "§5", "§6", "§7"} {
+		if !strings.Contains(out, section) {
+			t.Errorf("expected %s in output, got:\n%s", section, out)
+		}
+	}
+	if strings.Contains(out, "[FAIL]") {
+		t.Errorf("baseline produced FAIL items:\n%s", out)
+	}
+	if strings.Contains(out, "[WARN]") {
+		t.Errorf("baseline produced WARN items:\n%s", out)
+	}
+	if !strings.Contains(out, "doit is correctly configured against the safety contract") {
+		t.Errorf("expected baseline-OK summary, got:\n%s", out)
+	}
+}
+
+func TestCheckConfig_DangerousTierEnabledWarns(t *testing.T) {
+	dir := t.TempDir()
+	settings := filepath.Join(dir, "settings.json")
+	os.WriteFile(settings, []byte(`{"permissions":{"deny":["Bash"]}}`), 0600)
+	claudeJSON := filepath.Join(dir, ".claude.json")
+	os.WriteFile(claudeJSON, []byte(`{"mcpServers":{"doit":{"command":"doit"}}}`), 0600)
+
+	eng := newTestEngineWithDangerous(t, true)
+	out := runCheckConfigWith(t, eng, settings, claudeJSON, dir)
+
+	if !strings.Contains(out, "[WARN] §4") {
+		t.Errorf("expected [WARN] §4 for dangerous tier, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Dangerous tier is ENABLED") {
+		t.Errorf("expected dangerous-tier warning, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Configuration weakened from the safety-contract baseline") {
+		t.Errorf("expected weakened-baseline summary, got:\n%s", out)
+	}
+}
+
+func TestCheckConfig_BashNotDeniedFails(t *testing.T) {
+	dir := t.TempDir()
+	settings := filepath.Join(dir, "settings.json")
+	os.WriteFile(settings, []byte(`{"permissions":{"deny":[]}}`), 0600)
+	claudeJSON := filepath.Join(dir, ".claude.json")
+	os.WriteFile(claudeJSON, []byte(`{"mcpServers":{"doit":{"command":"doit"}}}`), 0600)
+
+	eng := newTestEngineWithDangerous(t, false)
+	out := runCheckConfigWith(t, eng, settings, claudeJSON, dir)
+
+	if !strings.Contains(out, "[FAIL] §1") {
+		t.Errorf("expected [FAIL] §1 when Bash is not denied, got:\n%s", out)
+	}
+}
+
+func TestCheckConfig_ListsSiblingMCPServers(t *testing.T) {
+	dir := t.TempDir()
+	settings := filepath.Join(dir, "settings.json")
+	os.WriteFile(settings, []byte(`{"permissions":{"deny":["Bash"]}}`), 0600)
+	claudeJSON := filepath.Join(dir, ".claude.json")
+	os.WriteFile(claudeJSON, []byte(`{"mcpServers":{"doit":{"command":"doit"},"github":{"command":"gh"},"filesystem":{"command":"fs"}}}`), 0600)
+
+	eng := newTestEngineWithDangerous(t, false)
+	out := runCheckConfigWith(t, eng, settings, claudeJSON, dir)
+
+	if !strings.Contains(out, "[INFO] §3") {
+		t.Errorf("expected [INFO] §3 for sibling servers, got:\n%s", out)
+	}
+	if !strings.Contains(out, "filesystem, github") {
+		t.Errorf("expected sorted sibling list excluding doit, got:\n%s", out)
+	}
+}
+
+func TestCheckConfig_ProjectConfigPresent(t *testing.T) {
+	dir := t.TempDir()
+	settings := filepath.Join(dir, "settings.json")
+	os.WriteFile(settings, []byte(`{"permissions":{"deny":["Bash"]}}`), 0600)
+	claudeJSON := filepath.Join(dir, ".claude.json")
+	os.WriteFile(claudeJSON, []byte(`{"mcpServers":{"doit":{"command":"doit"}}}`), 0600)
+
+	projectDir := filepath.Join(dir, "project")
+	doitDir := filepath.Join(projectDir, ".doit")
+	if err := os.MkdirAll(doitDir, 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	os.WriteFile(filepath.Join(doitDir, "config.yaml"), []byte("tiers: {}\n"), 0600)
+
+	eng := newTestEngineWithDangerous(t, false)
+	out := runCheckConfigWith(t, eng, settings, claudeJSON, projectDir)
+
+	if !strings.Contains(out, "[INFO] §7") {
+		t.Errorf("expected [INFO] §7 when project config present, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Per-project .doit/config.yaml is present") {
+		t.Errorf("expected project-config summary, got:\n%s", out)
+	}
+}
+
+// runCheckConfigWith invokes handleCheckConfig with the supplied paths,
+// chdir'ing to projectCwd so the §7 check sees the right project directory.
+func runCheckConfigWith(t *testing.T, eng *engine.Engine, settingsPath, claudeJSONPath, projectCwd string) string {
+	t.Helper()
+	prevCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(projectCwd); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prevCwd) })
+
+	// HOME drives ~/.claude.json discovery; redirect it so the test never
+	// touches the developer's real config.
+	t.Setenv("HOME", filepath.Dir(claudeJSONPath))
+
+	handler := handleCheckConfig(eng)
+	result, err := handler(context.Background(), newCallReq("doit_check_config", map[string]any{
+		"settings_path": settingsPath,
+	}))
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	return textContent(t, result)
+}
+
 // --- helpers ---
 
 func newCallReq(name string, args map[string]any) mcp.CallToolRequest {
@@ -171,12 +305,23 @@ func textContent(t *testing.T, result *mcp.CallToolResult) string {
 }
 
 func newTestEngine(t *testing.T) *engine.Engine {
+	return newTestEngineWithDangerous(t, true)
+}
+
+// newTestEngineWithDangerous builds a test engine and lets the caller pin
+// whether the dangerous tier is enabled. The check_config tests need both
+// states to verify §4 reporting.
+func newTestEngineWithDangerous(t *testing.T, dangerous bool) *engine.Engine {
 	t.Helper()
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
 	auditPath := filepath.Join(dir, "audit.jsonl")
+	dangerousVal := "false"
+	if dangerous {
+		dangerousVal = "true"
+	}
 	os.WriteFile(cfgPath, []byte(
-		"tiers:\n  read: true\n  build: true\n  write: true\n  dangerous: true\n"+
+		"tiers:\n  read: true\n  build: true\n  write: true\n  dangerous: "+dangerousVal+"\n"+
 			"audit:\n  path: "+auditPath+"\n"+
 			"policy:\n  level1_enabled: true\n  level2_enabled: false\n  level3_enabled: false\n",
 	), 0600)
