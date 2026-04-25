@@ -61,12 +61,42 @@ type Capability interface {
 	// Description returns a human-readable summary for help output.
 	Description() string
 
-	// Tier returns the safety classification.
+	// Tier returns the base safety classification. For capabilities that
+	// support context-aware tier evaluation (see TierEvaluator), Tier()
+	// returns the conservative default used when context is unavailable
+	// (e.g. capability listing). The policy engine calls EffectiveTier()
+	// which queries TierEvaluator when the capability implements it.
 	Tier() Tier
 
 	// Validate checks args before execution. Returns a descriptive error
 	// if args are invalid.
 	Validate(args []string) error
+}
+
+// TierEvaluator is an optional interface for capabilities whose effective
+// tier depends on the arguments and working directory at evaluation time.
+// For example, "rm foo.go" targeting a git-tracked file is write-tier
+// (recoverable via git), whereas "rm untracked.txt" is dangerous-tier.
+// Capabilities that implement this interface return the conservative base
+// tier from Tier() and refine it via TierForArgs when context is available.
+type TierEvaluator interface {
+	// TierForArgs returns the effective tier given the parsed argument list
+	// and the working directory from which the command is being run.
+	// Implementations must never return a tier lower (more permissive) than
+	// TierWrite — the goal is to promote dangerous → write when safe to do
+	// so, not to reach read or build tiers.
+	// Must be safe to call concurrently.
+	TierForArgs(args []string, cwd string) Tier
+}
+
+// EffectiveTier returns the tier to use for policy and audit purposes.
+// If c implements TierEvaluator, TierForArgs is called with the provided
+// args and cwd. Otherwise c.Tier() is returned unchanged.
+func EffectiveTier(c Capability, args []string, cwd string) Tier {
+	if te, ok := c.(TierEvaluator); ok {
+		return te.TierForArgs(args, cwd)
+	}
+	return c.Tier()
 }
 
 // Registry maps capability names to implementations and controls tier access.

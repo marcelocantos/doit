@@ -1469,7 +1469,7 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 	capName := args[0]
 	tier := cap.TierRead
 	if c, lookupErr := e.reg.Lookup(capName); lookupErr == nil {
-		tier = c.Tier()
+		tier = cap.EffectiveTier(c, args[1:], req.Cwd)
 	}
 	segments = append(segments, capName)
 	tiers = append(tiers, tier.String())
