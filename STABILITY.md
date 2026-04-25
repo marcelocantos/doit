@@ -115,6 +115,7 @@ Snapshot as of v0.8.0.
 | `tiers.dangerous` | bool | `false` | Stable |
 | `audit.path` | string | `~/.local/share/doit/audit.jsonl` | Stable |
 | `audit.max_size_mb` | int | `100` | Stable |
+| `audit.l3_max_chars` | int | `16384` | Needs review |
 | `rules.<cap>.reject_flags` | []string | per-capability | Stable |
 | `rules.<cap>.subcommands.<sub>.reject_flags` | []string | per-subcommand | Stable |
 | `policy.level1_enabled` | bool | `true` | Stable |
@@ -189,7 +190,25 @@ collapses the cascade to a single-tier.
 | Script path | `script_path` | string (omitempty) | Needs review |
 | Expected duration | `expected_duration_ms` | float64 (omitempty) | Needs review |
 | Timed out | `timed_out` | bool (omitempty) | Needs review |
+| L3 fast-tier evidence | `l3_fast` | L3Evidence object (omitempty) | Needs review |
+| L3 deep-tier evidence | `l3_deep` | L3Evidence object (omitempty) | Needs review |
 | Entry hash | `hash` | string (hex SHA-256) | Stable |
+
+**L3Evidence object** (nested within `l3_fast` / `l3_deep`):
+
+| Field | JSON key | Type | Stability |
+|---|---|---|---|
+| Model name | `model` | string | Needs review |
+| Rendered prompt | `prompt` | string | Needs review |
+| Model response | `response` | string | Needs review |
+| Latency | `latency_ms` | float64 | Needs review |
+| Decision | `decision` | string (allow/deny/escalate) | Needs review |
+| Reason | `reason` | string (omitempty) | Needs review |
+| Truncated | `truncated` | bool (omitempty) | Needs review |
+| Original prompt size | `original_prompt_bytes` | int (omitempty, only when truncated) | Needs review |
+| Original response size | `original_response_bytes` | int (omitempty, only when truncated) | Needs review |
+
+`l3_fast` is present on every entry where `policy_level == 3`. `l3_deep` is additionally present when the cascade fired both tiers (fast escalated, deep decided). Prompt and response are stored verbatim up to `audit.l3_max_chars` (default 16384) per block; when truncation occurs `truncated` is `true` and the original byte counts are recorded. Truncated strings end with `\n[…truncated, total N bytes]`.
 
 The `pipeline` field retains its name for backwards compatibility with
 older audit logs, but in v0.5.0+ it holds the full command string passed

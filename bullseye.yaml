@@ -607,7 +607,6 @@ targets:
   T34:
     name: STARTUP warns when sibling MCP servers expose execution-adjacent primitives
     status: achieved
-    achieved: 2026-04-25
     value: 0.0
     cost: 0.0
     observable: true
@@ -621,10 +620,10 @@ targets:
     context: docs/threat-model.md explicitly calls out that doit is not in the loop when sibling MCP servers expose execution-adjacent primitives — a filesystem-write tool followed by chmod+exec, an HTTP client that can reach a local service, a language-interpreter MCP server. The threat model documents this as a limit, but documentation alone does not surface the limit at the moment it bites. An operator with a benign-looking MCP loadout may have inadvertently created a doit-bypass channel. A startup warning catches this at the moment the agent connects, while there's still a chance to revise the loadout. The warning should be loud (visible in agent context, hard to miss) but suppressible (so once acknowledged, it doesn't become noise). This is the runtime complement to the documentation-only mitigation that landed in 🎯T32.
     origin: manual
     discovered: 2026-04-25
+    achieved: 2026-04-25
   T35:
     name: L3 evaluator's prompt-injection surface is enumerated and mitigations gap-checked
     status: achieved
-    achieved: 2026-04-25
     value: 0.0
     cost: 0.0
     observable: true
@@ -638,6 +637,23 @@ targets:
     context: 'The threat model names L3 (the live LLM evaluator) as itself an LLM with prompt-injection risk. That naming is the start, not the end — the actual surface area, the specific inputs L3 sees, and which of those carry attacker-controlled content has not been enumerated. Without that enumeration there''s no way to tell whether current defences are sufficient or a thin coat of paint over an open hole. Pre-1.0 this matters because L3''s decisions are the last line of defence for ambiguous commands; an L3 that can be talked out of escalating is a hole in the safety contract. The work here is half-documentation, half-code: enumerate the surface, classify each input by trust level, identify gaps, fix the gaps that warrant fixing, and document the residual risks as accepted. The test corpus is the durable artifact — it lets future L3 model swaps (sonnet/opus version bumps) regression-test against the same attack patterns rather than relying on memory of what was tested last time.'
     origin: manual
     discovered: 2026-04-25
+    achieved: 2026-04-25
+  T37:
+    name: L3 invocations record full chain-of-evidence in the audit log
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - Every L3 invocation appends a structured l3 block to the audit entry containing model name, rendered prompt, model response, latency, decision, and reason
+    - When the cascade fires both tiers, both blocks are recorded as l3_fast and l3_deep on the same audit entry
+    - Prompt and response are stored verbatim with XML-tag hardening already in place
+    - L3 entries respect a configurable size cap (audit.l3_max_chars default 16384) with truncation marker
+    - STABILITY.md catalogue is updated with new l3/l3_fast/l3_deep fields and size-cap config knob
+    - 'Tests cover: single-tier sonnet decision records l3_fast only; cascaded sonnet-opus records both; retry bypass records nothing; long prompt is truncated with marker'
+    context: Audit chain-of-evidence for L3 LLM decisions. Implemented L3Evidence struct in audit/entry.go, threaded via CascadeEvidence from policy.Level3.EvaluateWithEvidence through engine.evaluatePolicy into LogOptions and audit entries. Added audit.l3_max_chars config (default 16384). ModelNamer interface lets llm.Client expose its model name to the policy layer.
+    origin: manual
+    discovered: 2026-04-25
+    achieved: 2026-04-25
   T4:
     name: Per-project policy
     status: achieved

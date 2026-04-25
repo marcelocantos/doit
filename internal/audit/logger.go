@@ -122,6 +122,8 @@ func (l *Logger) Log(pipeline string, segments, tiers []string, exitCode int, er
 		entry.ExpectedDuration = opts.ExpectedDuration
 		entry.TimedOut = opts.TimedOut
 		entry.ProjectRoot = opts.ProjectRoot
+		entry.L3Fast = opts.L3Fast
+		entry.L3Deep = opts.L3Deep
 	}
 
 	// Compute hash with Hash field empty.

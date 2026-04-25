@@ -523,7 +523,7 @@ func (e *Engine) Evaluate(ctx context.Context, req Request) *EvalResult {
 		}
 	}
 
-	result, _, _ := e.evaluatePolicy(ctx, args, req)
+	result, _, _, _ := e.evaluatePolicy(ctx, args, req)
 	if result == nil {
 		return &EvalResult{
 			Decision: "escalate",
@@ -715,12 +715,12 @@ func (e *Engine) Execute(ctx context.Context, req Request) *Result {
 	args := req.args()
 
 	// Policy evaluation.
-	pResult, segments, tiers := e.evaluatePolicy(ctx, args, req)
+	pResult, segments, tiers, l3ev := e.evaluatePolicy(ctx, args, req)
 
 	wasL3 := false
 	if pResult != nil {
 		if pResult.Decision == policy.Deny {
-			e.logPolicyResult(req, args, pResult, segments, tiers, 1)
+			e.logPolicyResult(req, args, pResult, segments, tiers, 1, l3ev)
 			if pResult.Level == 3 {
 				go e.tryPromote()
 			}
@@ -735,7 +735,7 @@ func (e *Engine) Execute(ctx context.Context, req Request) *Result {
 		}
 
 		if pResult.Decision == policy.Escalate && pResult.Level == 3 && e.tokenStore != nil {
-			e.logPolicyResult(req, args, pResult, segments, tiers, 1)
+			e.logPolicyResult(req, args, pResult, segments, tiers, 1, l3ev)
 			token, tokenErr := e.tokenStore.Issue(strings.Join(args, " "), args)
 			if tokenErr != nil {
 				return &Result{
@@ -764,6 +764,7 @@ func (e *Engine) Execute(ctx context.Context, req Request) *Result {
 			RuleID:        pResult.RuleID,
 			Justification: req.Justification,
 			SafetyArg:     req.SafetyArg,
+			L3Evidence:    l3ev,
 		})
 	}
 
@@ -800,12 +801,12 @@ func (e *Engine) ExecuteStreaming(ctx context.Context, req Request, stdout, stde
 
 	args := req.args()
 
-	pResult, segments, tiers := e.evaluatePolicy(ctx, args, req)
+	pResult, segments, tiers, l3ev := e.evaluatePolicy(ctx, args, req)
 
 	wasL3 := false
 	if pResult != nil {
 		if pResult.Decision == policy.Deny {
-			e.logPolicyResult(req, args, pResult, segments, tiers, 1)
+			e.logPolicyResult(req, args, pResult, segments, tiers, 1, l3ev)
 			if pResult.Level == 3 {
 				go e.tryPromote()
 			}
@@ -821,7 +822,7 @@ func (e *Engine) ExecuteStreaming(ctx context.Context, req Request, stdout, stde
 		}
 
 		if pResult.Decision == policy.Escalate && pResult.Level == 3 && e.tokenStore != nil {
-			e.logPolicyResult(req, args, pResult, segments, tiers, 1)
+			e.logPolicyResult(req, args, pResult, segments, tiers, 1, l3ev)
 			token, tokenErr := e.tokenStore.Issue(strings.Join(args, " "), args)
 			if tokenErr != nil {
 				fmt.Fprintf(stderr, "doit: token issue: %v\n", tokenErr)
@@ -847,6 +848,7 @@ func (e *Engine) ExecuteStreaming(ctx context.Context, req Request, stdout, stde
 			RuleID:        pResult.RuleID,
 			Justification: req.Justification,
 			SafetyArg:     req.SafetyArg,
+			L3Evidence:    l3ev,
 		})
 	}
 
@@ -1456,9 +1458,9 @@ func (req *Request) args() []string {
 	return nil
 }
 
-func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request) (result *policy.Result, segments, tiers []string) {
+func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request) (result *policy.Result, segments, tiers []string, l3ev *policy.CascadeEvidence) {
 	if len(args) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	// Token validation first.
@@ -1470,14 +1472,14 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 				Level:    3,
 				Reason:   fmt.Sprintf("invalid approval token: %v", err),
 				RuleID:   "approval-token",
-			}, nil, nil
+			}, nil, nil, nil
 		}
 		return &policy.Result{
 			Decision: policy.Allow,
 			Level:    3,
 			Reason:   "approved via approval token",
 			RuleID:   "approval-token",
-		}, nil, nil
+		}, nil, nil, nil
 	}
 
 	// Extract the first word as the capability name for tier lookup.
@@ -1547,21 +1549,23 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 		log.Printf("doit: L3 LLM call starting for %q", policyReq.Command)
 		t0 := time.Now()
 
+		maxChars := e.cfg.Audit.L3MaxChars
+
 		ws := e.ActiveSession()
 		if ws != nil {
 			sessionCtx := &policy.SessionContext{
 				Scope:       ws.Scope,
 				Description: ws.Description,
 			}
-			result = e.policyL3.EvaluateInSession(ctx, policyReq, sessionCtx)
+			result, l3ev = e.policyL3.EvaluateWithEvidence(ctx, policyReq, sessionCtx, maxChars)
 		} else {
-			result = e.policyL3.Evaluate(ctx, policyReq)
+			result, l3ev = e.policyL3.EvaluateWithEvidence(ctx, policyReq, nil, maxChars)
 		}
 
 		elapsed := time.Since(t0)
 		log.Printf("doit: L3 LLM call completed in %v: %s (%s)", elapsed, result.Decision, result.Reason)
 	}
-	return result, segments, tiers
+	return result, segments, tiers, l3ev
 }
 
 func (e *Engine) runCommand(ctx context.Context, args []string, req Request, stdout, stderr io.Writer) int {
@@ -1649,6 +1653,10 @@ func (e *Engine) logExecution(ctx context.Context, cmdStr string, segments, tier
 		opts.PolicyRuleID = info.RuleID
 		opts.Justification = info.Justification
 		opts.SafetyArg = info.SafetyArg
+		if info.L3Evidence != nil {
+			opts.L3Fast = info.L3Evidence.Fast
+			opts.L3Deep = info.L3Evidence.Deep
+		}
 	}
 	if req.ExpectedDurationSeconds > 0 {
 		opts.ExpectedDuration = float64(req.ExpectedDurationSeconds) * 1000.0
@@ -1658,7 +1666,7 @@ func (e *Engine) logExecution(ctx context.Context, cmdStr string, segments, tier
 	_ = e.logger.Log(cmdStr, segments, tiers, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
 }
 
-func (e *Engine) logPolicyResult(req Request, args []string, result *policy.Result, segments, tiers []string, exitCode int) {
+func (e *Engine) logPolicyResult(req Request, args []string, result *policy.Result, segments, tiers []string, exitCode int, l3ev *policy.CascadeEvidence) {
 	if e.logger == nil {
 		return
 	}
@@ -1668,6 +1676,10 @@ func (e *Engine) logPolicyResult(req Request, args []string, result *policy.Resu
 		PolicyRuleID:  result.RuleID,
 		Justification: req.Justification,
 		SafetyArg:     req.SafetyArg,
+	}
+	if l3ev != nil {
+		opts.L3Fast = l3ev.Fast
+		opts.L3Deep = l3ev.Deep
 	}
 	_ = e.logger.Log(
 		strings.Join(args, " "),
