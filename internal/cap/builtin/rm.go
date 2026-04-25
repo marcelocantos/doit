@@ -17,7 +17,7 @@ import (
 // A non-recursive rm targeting a git-tracked file is classified as write-tier
 // (recoverable via `git checkout HEAD -- <path>`). All other cases keep the
 // default dangerous tier.
-type Rm struct{}
+type Rm struct{ Base }
 
 var _ cap.Capability = (*Rm)(nil)
 var _ cap.TierEvaluator = (*Rm)(nil)

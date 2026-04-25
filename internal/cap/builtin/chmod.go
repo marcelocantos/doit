@@ -9,7 +9,7 @@ import (
 	"github.com/marcelocantos/doit/internal/cap"
 )
 
-type Chmod struct{}
+type Chmod struct{ Base }
 
 var _ cap.Capability = (*Chmod)(nil)
 

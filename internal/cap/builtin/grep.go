@@ -8,7 +8,7 @@ import (
 	"github.com/marcelocantos/doit/internal/cap"
 )
 
-type Grep struct{}
+type Grep struct{ Base }
 
 var _ cap.Capability = (*Grep)(nil)
 

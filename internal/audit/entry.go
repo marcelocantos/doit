@@ -41,6 +41,8 @@ type Entry struct {
 	SafetyArg        string    `json:"safety_arg,omitempty"`           // worker's safety argument
 	ScriptHash       string    `json:"script_hash,omitempty"`          // sha256:... when gated by script-hash approval
 	ScriptPath       string    `json:"script_path,omitempty"`          // resolved script path for script-hash events
+	StdoutExcerpt    string    `json:"stdout_excerpt,omitempty"`       // first N bytes of stdout (see AuditConfig.OutputExcerptBytes)
+	StderrExcerpt    string    `json:"stderr_excerpt,omitempty"`       // first N bytes of stderr (see AuditConfig.OutputExcerptBytes)
 
 	L3Fast *L3Evidence `json:"l3_fast,omitempty"` // chain-of-evidence for fast-tier L3 invocation
 	L3Deep *L3Evidence `json:"l3_deep,omitempty"` // chain-of-evidence for deep-tier L3 invocation (when cascade fires)
@@ -72,6 +74,8 @@ type LogOptions struct {
 	ExpectedDuration float64 // milliseconds; 0 = unspecified
 	TimedOut         bool
 	ProjectRoot      string  // normalised project root path (for duration keying)
+	StdoutExcerpt    string  // captured stdout excerpt (empty = not captured)
+	StderrExcerpt    string  // captured stderr excerpt (empty = not captured)
 
 	L3Fast *L3Evidence
 	L3Deep *L3Evidence

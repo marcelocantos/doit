@@ -752,3 +752,20 @@ targets:
     origin: roadmap — STABILITY.md 1.0 gap
     discovered: 2026-04-10
     achieved: 2026-04-11
+  T39:
+    name: stdout/stderr excerpts captured for failure-mode commands
+    status: achieved
+    value: 0.0
+    cost: 0.0
+    observable: true
+    acceptance:
+    - When a command's audit entry would record exit_code != 0, policy_result == deny, or timed_out == true, doit captures up to N bytes of stdout and stderr into stdout_excerpt and stderr_excerpt audit fields
+    - Capture is opt-in for non-failure commands via audit.capture_output (always|on_failure|never; default on_failure)
+    - Capture cap is configurable via audit.output_excerpt_bytes (default 4096); excerpts exceeding the cap are truncated with a marker recording the original size
+    - Capture is non-disruptive — doit_execute streams stdout/stderr to the agent in real time; the audit-log copy is a tee
+    - Sensitive commands (capability RedactOutput()=true) skip capture; their excerpts record a fixed redaction marker
+    - STABILITY.md catalogue updated with the new audit fields, config knobs, and RedactOutput capability flag
+    - Tests cover all six scenarios named in the acceptance criteria
+    origin: manual
+    discovered: 2026-04-25
+    achieved: 2026-04-25

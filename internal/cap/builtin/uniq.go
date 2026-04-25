@@ -8,7 +8,7 @@ import (
 	"github.com/marcelocantos/doit/internal/cap"
 )
 
-type Uniq struct{}
+type Uniq struct{ Base }
 
 var _ cap.Capability = (*Uniq)(nil)
 

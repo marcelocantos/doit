@@ -628,10 +628,39 @@ func (e *Engine) runScriptCommand(ctx context.Context, req Request, sg scriptGat
 	ctx, cancel := withTimeoutIfSet(ctx, req.TimeoutSeconds)
 	defer cancel()
 
+	// Determine capture config.
+	capSize := e.cfg.Audit.OutputExcerptBytes
+	if capSize <= 0 {
+		capSize = 4096
+	}
+	captureMode := e.cfg.Audit.CaptureOutput
+	if captureMode == "" {
+		captureMode = "on_failure"
+	}
+
+	// Script commands are never redacted (no registered capability).
+	var capOut, capErr *captureWriter
+	outW := stdout
+	errW := stderr
+	if captureMode != "never" {
+		capOut = &captureWriter{cap: capSize}
+		capErr = &captureWriter{cap: capSize}
+		if stdout != nil {
+			outW = io.MultiWriter(stdout, capOut)
+		} else {
+			outW = capOut
+		}
+		if stderr != nil {
+			errW = io.MultiWriter(stderr, capErr)
+		} else {
+			errW = capErr
+		}
+	}
+
 	cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
 	configureProcessGroup(cmd)
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
+	cmd.Stdout = outW
+	cmd.Stderr = errW
 	if req.Cwd != "" {
 		cmd.Dir = req.Cwd
 	}
@@ -654,7 +683,7 @@ func (e *Engine) runScriptCommand(ctx context.Context, req Request, sg scriptGat
 			timedOut = true
 			exitCode = timeoutExitCode
 			errMsg = fmt.Sprintf("timed out after %ds", req.TimeoutSeconds)
-			fmt.Fprintf(stderr, "doit: command timed out after %ds\n", req.TimeoutSeconds)
+			fmt.Fprintf(errW, "doit: command timed out after %ds\n", req.TimeoutSeconds)
 		} else {
 			var exitErr *exec.ExitError
 			if errors.As(err, &exitErr) {
@@ -662,8 +691,18 @@ func (e *Engine) runScriptCommand(ctx context.Context, req Request, sg scriptGat
 			} else {
 				exitCode = 2
 				errMsg = err.Error()
-				fmt.Fprintf(stderr, "doit: %v\n", err)
+				fmt.Fprintf(errW, "doit: %v\n", err)
 			}
+		}
+	}
+
+	// Attach excerpts when warranted.
+	var stdoutExcerpt, stderrExcerpt string
+	if capOut != nil {
+		failure := exitCode != 0 || timedOut
+		if shouldCapture(captureMode, failure) {
+			stdoutExcerpt = capOut.excerpt()
+			stderrExcerpt = capErr.excerpt()
 		}
 	}
 
@@ -678,6 +717,8 @@ func (e *Engine) runScriptCommand(ctx context.Context, req Request, sg scriptGat
 			ScriptPath:    sg.Invocation.ResolvedPath,
 			TimedOut:      timedOut,
 			ProjectRoot:   e.projectRoot,
+			StdoutExcerpt: stdoutExcerpt,
+			StderrExcerpt: stderrExcerpt,
 		}
 		if req.ExpectedDurationSeconds > 0 {
 			opts.ExpectedDuration = float64(req.ExpectedDurationSeconds) * 1000.0
@@ -1604,10 +1645,48 @@ func (e *Engine) runShellCommand(ctx context.Context, args []string, req Request
 	ctx, cancel := withTimeoutIfSet(ctx, req.TimeoutSeconds)
 	defer cancel()
 
+	// Determine capture config.
+	capSize := e.cfg.Audit.OutputExcerptBytes
+	if capSize <= 0 {
+		capSize = 4096
+	}
+	captureMode := e.cfg.Audit.CaptureOutput
+	if captureMode == "" {
+		captureMode = "on_failure"
+	}
+
+	// Check whether the capability has redact_output set.
+	redact := false
+	if len(args) > 0 {
+		if c, err := e.reg.Lookup(args[0]); err == nil {
+			redact = c.RedactOutput()
+		}
+	}
+
+	// Set up tee writers. We always capture when mode != "never" (or redact),
+	// and decide at audit time whether to attach. This avoids two command runs.
+	var capOut, capErr *captureWriter
+	outW := stdout
+	errW := stderr
+	if captureMode != "never" {
+		capOut = &captureWriter{cap: capSize}
+		capErr = &captureWriter{cap: capSize}
+		if stdout != nil {
+			outW = io.MultiWriter(stdout, capOut)
+		} else {
+			outW = capOut
+		}
+		if stderr != nil {
+			errW = io.MultiWriter(stderr, capErr)
+		} else {
+			errW = capErr
+		}
+	}
+
 	cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
 	configureProcessGroup(cmd)
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
+	cmd.Stdout = outW
+	cmd.Stderr = errW
 	if req.Cwd != "" {
 		cmd.Dir = req.Cwd
 	}
@@ -1630,7 +1709,7 @@ func (e *Engine) runShellCommand(ctx context.Context, args []string, req Request
 			timedOut = true
 			exitCode = timeoutExitCode
 			errMsg = fmt.Sprintf("timed out after %ds", req.TimeoutSeconds)
-			fmt.Fprintf(stderr, "doit: command timed out after %ds\n", req.TimeoutSeconds)
+			fmt.Fprintf(errW, "doit: command timed out after %ds\n", req.TimeoutSeconds)
 		} else {
 			var exitErr *exec.ExitError
 			if errors.As(err, &exitErr) {
@@ -1638,12 +1717,26 @@ func (e *Engine) runShellCommand(ctx context.Context, args []string, req Request
 			} else {
 				exitCode = 2
 				errMsg = err.Error()
-				fmt.Fprintf(stderr, "doit: %v\n", err)
+				fmt.Fprintf(errW, "doit: %v\n", err)
 			}
 		}
 	}
 
-	seq := e.logExecution(ctx, cmdStr, nil, nil, exitCode, errMsg, duration, req, timedOut)
+	var stdoutExcerpt, stderrExcerpt string
+	if capOut != nil {
+		failure := exitCode != 0 || timedOut
+		if shouldCapture(captureMode, failure) {
+			if redact {
+				stdoutExcerpt = redactedMarker
+				stderrExcerpt = redactedMarker
+			} else {
+				stdoutExcerpt = capOut.excerpt()
+				stderrExcerpt = capErr.excerpt()
+			}
+		}
+	}
+
+	seq := e.logExecutionWithExcerpts(ctx, cmdStr, nil, nil, exitCode, errMsg, duration, req, timedOut, stdoutExcerpt, stderrExcerpt)
 	return exitCode, seq
 }
 
@@ -1662,6 +1755,10 @@ func withTimeoutIfSet(ctx context.Context, seconds int) (context.Context, contex
 }
 
 func (e *Engine) logExecution(ctx context.Context, cmdStr string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, req Request, timedOut bool) uint64 {
+	return e.logExecutionWithExcerpts(ctx, cmdStr, segments, tiers, exitCode, errMsg, duration, req, timedOut, "", "")
+}
+
+func (e *Engine) logExecutionWithExcerpts(ctx context.Context, cmdStr string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, req Request, timedOut bool, stdoutExcerpt, stderrExcerpt string) uint64 {
 	if e.logger == nil {
 		return 0
 	}
@@ -1682,6 +1779,8 @@ func (e *Engine) logExecution(ctx context.Context, cmdStr string, segments, tier
 	}
 	opts.TimedOut = timedOut
 	opts.ProjectRoot = e.projectRoot
+	opts.StdoutExcerpt = stdoutExcerpt
+	opts.StderrExcerpt = stderrExcerpt
 	seq, _ := e.logger.Log(cmdStr, segments, tiers, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
 	return seq
 }

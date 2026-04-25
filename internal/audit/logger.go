@@ -133,6 +133,8 @@ func (l *Logger) Log(pipeline string, segments, tiers []string, exitCode int, er
 		entry.ProposedRuleSource = opts.ProposedRuleSource
 		entry.ProposedRuleGenerality = opts.ProposedRuleGenerality
 		entry.ProposedRuleID = opts.ProposedRuleID
+		entry.StdoutExcerpt = opts.StdoutExcerpt
+		entry.StderrExcerpt = opts.StderrExcerpt
 	}
 
 	// Compute hash with Hash field empty.

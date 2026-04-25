@@ -9,7 +9,7 @@ import (
 	"github.com/marcelocantos/doit/internal/cap"
 )
 
-type Git struct{}
+type Git struct{ Base }
 
 var _ cap.Capability = (*Git)(nil)
 

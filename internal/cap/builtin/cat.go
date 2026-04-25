@@ -8,7 +8,7 @@ import (
 	"github.com/marcelocantos/doit/internal/cap"
 )
 
-type Cat struct{}
+type Cat struct{ Base }
 
 var _ cap.Capability = (*Cat)(nil)
 

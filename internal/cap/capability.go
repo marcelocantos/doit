@@ -71,6 +71,13 @@ type Capability interface {
 	// Validate checks args before execution. Returns a descriptive error
 	// if args are invalid.
 	Validate(args []string) error
+
+	// RedactOutput returns true when the capability handles sensitive data
+	// (e.g. credentials, secrets) whose output must never be captured in
+	// the audit log. When true, audit excerpt fields record a fixed
+	// redaction marker instead of actual output. All built-in capabilities
+	// return false; this is forward-compatible scaffolding for future use.
+	RedactOutput() bool
 }
 
 // TierEvaluator is an optional interface for capabilities whose effective
