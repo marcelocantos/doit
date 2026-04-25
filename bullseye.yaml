@@ -638,6 +638,22 @@ targets:
     origin: manual
     discovered: 2026-04-25
     achieved: 2026-04-25
+  T36:
+    name: Elicitation outcomes and L2 promotions land in the audit chain
+    status: achieved
+    achieved: 2026-04-25
+    value: 3.0
+    cost: 2.0
+    acceptance:
+    - Phase 1 elicitation (allow_once / allow_always / deny_once / deny_always) writes an audit entry with policy_result matching the choice, parent_seq linking back to the originating command, elicitation_prompt, elicitation_choice, and elicitation_latency_ms
+    - Phase 2 rule promotion (proposal accepted or declined) writes an audit entry with proposed_rule_source, proposed_rule_generality, and proposed_rule_id
+    - parent_seq is non-zero and equals the seq of the originating command entry
+    - elicitation_latency_ms captures wall-clock time between prompt presentation and user response
+    - Hash chain integrity is preserved across elicitation entries (audit verify passes)
+    - New fields documented in STABILITY.md audit entry schema table
+    context: 'The audit log records command executions but not human elicitation decisions. When L3 escalates and the user approves/denies a command, or when the user accepts a Starlark rule proposal, those decisions are unrecorded. This creates a gap: the log shows what ran but not why a borderline command was approved or rejected, and rule provenance is lost. Filling this gap requires two new entry types: one for the policy decision (Phase 1) and one for rule promotion (Phase 2). Each links back to its originating command via parent_seq.'
+    origin: manual
+    discovered: 2026-04-25
   T37:
     name: L3 invocations record full chain-of-evidence in the audit log
     status: achieved

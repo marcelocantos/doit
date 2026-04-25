@@ -88,13 +88,15 @@ func (l *Logger) checkSize() bool {
 }
 
 // Log writes an audit entry to the log file. If opts is non-nil, policy
-// evaluation metadata is included in the entry.
-func (l *Logger) Log(pipeline string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, cwd string, retry bool, opts *LogOptions) error {
+// evaluation metadata is included in the entry. Returns the assigned sequence
+// number so callers can link child entries (e.g. elicitation entries) back to
+// this entry via ParentSeq.
+func (l *Logger) Log(pipeline string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, cwd string, retry bool, opts *LogOptions) (uint64, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	if l.checkSize() {
-		return nil // silently skip when size limit reached (warning already logged)
+		return 0, nil // silently skip when size limit reached (warning already logged)
 	}
 
 	l.seq++
@@ -124,6 +126,13 @@ func (l *Logger) Log(pipeline string, segments, tiers []string, exitCode int, er
 		entry.ProjectRoot = opts.ProjectRoot
 		entry.L3Fast = opts.L3Fast
 		entry.L3Deep = opts.L3Deep
+		entry.ParentSeq = opts.ParentSeq
+		entry.ElicitationPrompt = opts.ElicitationPrompt
+		entry.ElicitationChoice = opts.ElicitationChoice
+		entry.ElicitationLatencyMs = opts.ElicitationLatencyMs
+		entry.ProposedRuleSource = opts.ProposedRuleSource
+		entry.ProposedRuleGenerality = opts.ProposedRuleGenerality
+		entry.ProposedRuleID = opts.ProposedRuleID
 	}
 
 	// Compute hash with Hash field empty.
@@ -132,20 +141,20 @@ func (l *Logger) Log(pipeline string, segments, tiers []string, exitCode int, er
 
 	data, err := json.Marshal(entry)
 	if err != nil {
-		return fmt.Errorf("marshal audit entry: %w", err)
+		return 0, fmt.Errorf("marshal audit entry: %w", err)
 	}
 	data = append(data, '\n')
 
 	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
-		return fmt.Errorf("open audit log: %w", err)
+		return 0, fmt.Errorf("open audit log: %w", err)
 	}
 	defer f.Close()
 
 	if _, err := f.Write(data); err != nil {
-		return fmt.Errorf("write audit entry: %w", err)
+		return 0, fmt.Errorf("write audit entry: %w", err)
 	}
-	return nil
+	return entry.Seq, nil
 }
 
 // Path returns the audit log file path.

@@ -22,7 +22,7 @@ func TestLogAndVerify(t *testing.T) {
 
 	// Write several entries.
 	for i := 0; i < 5; i++ {
-		err := logger.Log(
+		_, err := logger.Log(
 			"test pipeline",
 			[]string{"grep", "head"},
 			[]string{"read", "read"},
@@ -53,7 +53,7 @@ func TestVerifyDetectsTampering(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		_ = logger.Log("test", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
+		_, _ = logger.Log("test", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
 	}
 
 	// Tamper with the file: modify a byte in the middle.
@@ -88,7 +88,7 @@ func TestVerifyDetectsSequenceGap(t *testing.T) {
 	}
 
 	for i := 0; i < 5; i++ {
-		_ = logger.Log("test", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
+		_, _ = logger.Log("test", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
 	}
 
 	// Delete the middle line (line 3 of 5).
@@ -135,15 +135,15 @@ func TestLoggerResumesChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = logger1.Log("first", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
-	_ = logger1.Log("second", []string{"grep"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
+	_, _ = logger1.Log("first", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
+	_, _ = logger1.Log("second", []string{"grep"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
 
 	// Create a new logger (simulating process restart).
 	logger2, err := NewLogger(path, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = logger2.Log("third", []string{"head"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
+	_, _ = logger2.Log("third", []string{"head"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
 
 	// The chain should still be valid.
 	if err := Verify(path); err != nil {
@@ -181,7 +181,7 @@ func TestLoggerSizeLimit(t *testing.T) {
 
 	// Write 100 entries to hit the first size check at writesSince==100.
 	for i := 0; i < sizeCheckInterval; i++ {
-		_ = logger.Log("test", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
+		_, _ = logger.Log("test", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
 	}
 
 	// Get file size after 100 writes (before the size check fires).
@@ -193,11 +193,11 @@ func TestLoggerSizeLimit(t *testing.T) {
 
 	// Write one more entry — this triggers the size check (writesSince resets),
 	// which should set sizeLimitHit=true for future writes.
-	_ = logger.Log("trigger", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
+	_, _ = logger.Log("trigger", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
 
 	// Further writes should be skipped.
-	_ = logger.Log("skipped", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
-	_ = logger.Log("skipped2", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
+	_, _ = logger.Log("skipped", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
+	_, _ = logger.Log("skipped2", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
 
 	infoAfter, err := os.Stat(path)
 	if err != nil {
@@ -222,7 +222,7 @@ func TestTailMalformedEntries(t *testing.T) {
 
 	// Write 3 valid entries.
 	for i := 0; i < 3; i++ {
-		_ = logger.Log("test", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
+		_, _ = logger.Log("test", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
 	}
 
 	// Inject a malformed line.
@@ -234,7 +234,7 @@ func TestTailMalformedEntries(t *testing.T) {
 	f.Close()
 
 	// Write one more valid entry.
-	_ = logger.Log("after", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
+	_, _ = logger.Log("after", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
 
 	entries, err := Tail(path, 10)
 	if err == nil {
@@ -246,5 +246,138 @@ func TestTailMalformedEntries(t *testing.T) {
 	// Should still return the valid entries.
 	if len(entries) != 4 {
 		t.Errorf("expected 4 valid entries, got %d", len(entries))
+	}
+}
+
+func TestLogReturnsSeq(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+
+	logger, err := NewLogger(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seq1, err := logger.Log("cmd1", nil, nil, 0, "", time.Millisecond, "/tmp", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq2, err := logger.Log("cmd2", nil, nil, 0, "", time.Millisecond, "/tmp", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if seq1 != 1 {
+		t.Errorf("expected seq1=1, got %d", seq1)
+	}
+	if seq2 != 2 {
+		t.Errorf("expected seq2=2, got %d", seq2)
+	}
+}
+
+func TestElicitationFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+
+	logger, err := NewLogger(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write a command entry and capture its seq.
+	cmdSeq, err := logger.Log("git push", []string{"git"}, []string{"write"}, 0, "", time.Millisecond, "/tmp", false, &LogOptions{
+		PolicyLevel:  3,
+		PolicyResult: "escalate",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write a Phase 1 elicitation entry linking back to the command.
+	elicSeq, err := logger.Log("<elicitation>", nil, nil, 0, "", 0, "", false, &LogOptions{
+		PolicyResult:         "allow_once",
+		ParentSeq:            cmdSeq,
+		ElicitationPrompt:    "Policy escalate for command: git push",
+		ElicitationChoice:    "allow_once",
+		ElicitationLatencyMs: 1234.5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write a Phase 2 promotion entry.
+	_, err = logger.Log("<elicitation-promotion>", nil, nil, 0, "", 0, "", false, &LogOptions{
+		PolicyResult:           "proposal_accepted",
+		ParentSeq:              cmdSeq,
+		ElicitationPrompt:      "Would you like a permanent rule?",
+		ElicitationChoice:      "proposal_accepted",
+		ProposedRuleSource:     "def check(cmd, args): return allow()",
+		ProposedRuleGenerality: "narrow",
+		ProposedRuleID:         "allow-git-push-42",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the chain is valid (hash chain covers all new fields).
+	if err := Verify(path); err != nil {
+		t.Fatalf("chain verify failed: %v", err)
+	}
+
+	entries, err := Tail(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(entries))
+	}
+
+	cmd := entries[0]
+	elicit := entries[1]
+	promotion := entries[2]
+
+	// Command entry has no elicitation fields.
+	if cmd.ParentSeq != 0 {
+		t.Errorf("command entry should have no parent_seq, got %d", cmd.ParentSeq)
+	}
+	if cmd.ElicitationChoice != "" {
+		t.Errorf("command entry should have no elicitation_choice, got %q", cmd.ElicitationChoice)
+	}
+
+	// Phase 1 elicitation entry links back to command.
+	if elicit.ParentSeq != cmdSeq {
+		t.Errorf("elicitation parent_seq=%d, want %d", elicit.ParentSeq, cmdSeq)
+	}
+	if elicit.ElicitationChoice != "allow_once" {
+		t.Errorf("elicitation_choice=%q, want allow_once", elicit.ElicitationChoice)
+	}
+	if elicit.ElicitationLatencyMs != 1234.5 {
+		t.Errorf("elicitation_latency_ms=%f, want 1234.5", elicit.ElicitationLatencyMs)
+	}
+	if elicit.ElicitationPrompt == "" {
+		t.Error("elicitation_prompt should not be empty")
+	}
+	if elicit.PolicyResult != "allow_once" {
+		t.Errorf("policy_result=%q, want allow_once", elicit.PolicyResult)
+	}
+	if elicit.Seq != elicSeq {
+		t.Errorf("elicitation seq=%d, want %d", elicit.Seq, elicSeq)
+	}
+
+	// Phase 2 promotion entry.
+	if promotion.ParentSeq != cmdSeq {
+		t.Errorf("promotion parent_seq=%d, want %d", promotion.ParentSeq, cmdSeq)
+	}
+	if promotion.ProposedRuleSource == "" {
+		t.Error("proposed_rule_source should not be empty")
+	}
+	if promotion.ProposedRuleGenerality != "narrow" {
+		t.Errorf("proposed_rule_generality=%q, want narrow", promotion.ProposedRuleGenerality)
+	}
+	if promotion.ProposedRuleID != "allow-git-push-42" {
+		t.Errorf("proposed_rule_id=%q, want allow-git-push-42", promotion.ProposedRuleID)
+	}
+	if promotion.PolicyResult != "proposal_accepted" {
+		t.Errorf("policy_result=%q, want proposal_accepted", promotion.PolicyResult)
 	}
 }

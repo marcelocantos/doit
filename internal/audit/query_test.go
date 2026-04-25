@@ -24,23 +24,23 @@ func seedTestLog(t *testing.T) (string, *Logger) {
 	}
 
 	// Entry 1: L1 allow, cap=go
-	if err := logger.Log("go build ./...", []string{"go"}, []string{"build"}, 0, "", time.Millisecond, "/tmp", false, opts(1, "allow")); err != nil {
+	if _, err := logger.Log("go build ./...", []string{"go"}, []string{"build"}, 0, "", time.Millisecond, "/tmp", false, opts(1, "allow")); err != nil {
 		t.Fatal(err)
 	}
 	// Entry 2: L3 allow, cap=git
-	if err := logger.Log("git push", []string{"git"}, []string{"write"}, 0, "", time.Millisecond, "/tmp", false, opts(3, "allow")); err != nil {
+	if _, err := logger.Log("git push", []string{"git"}, []string{"write"}, 0, "", time.Millisecond, "/tmp", false, opts(3, "allow")); err != nil {
 		t.Fatal(err)
 	}
 	// Entry 3: L3 deny, cap=rm
-	if err := logger.Log("rm -rf /tmp/x", []string{"rm"}, []string{"dangerous"}, 1, "denied", time.Millisecond, "/tmp", false, opts(3, "deny")); err != nil {
+	if _, err := logger.Log("rm -rf /tmp/x", []string{"rm"}, []string{"dangerous"}, 1, "denied", time.Millisecond, "/tmp", false, opts(3, "deny")); err != nil {
 		t.Fatal(err)
 	}
 	// Entry 4: L2 allow, cap=go
-	if err := logger.Log("go test ./...", []string{"go"}, []string{"build"}, 0, "", time.Millisecond, "/tmp", false, opts(2, "allow")); err != nil {
+	if _, err := logger.Log("go test ./...", []string{"go"}, []string{"build"}, 0, "", time.Millisecond, "/tmp", false, opts(2, "allow")); err != nil {
 		t.Fatal(err)
 	}
 	// Entry 5: L3 allow, cap=go
-	if err := logger.Log("go vet ./...", []string{"go"}, []string{"build"}, 0, "", time.Millisecond, "/tmp", false, opts(3, "allow")); err != nil {
+	if _, err := logger.Log("go vet ./...", []string{"go"}, []string{"build"}, 0, "", time.Millisecond, "/tmp", false, opts(3, "allow")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -113,7 +113,7 @@ func TestQueryByTimeRange(t *testing.T) {
 	// Log entries.
 	for i, cmd := range []string{"go build", "git status", "go test"} {
 		segs := []string{cmd[:strings.IndexByte(cmd, ' ')]}
-		if err := logger.Log(cmd, segs, []string{"build"}, 0, "", time.Millisecond, "/tmp", false, nil); err != nil {
+		if _, err := logger.Log(cmd, segs, []string{"build"}, 0, "", time.Millisecond, "/tmp", false, nil); err != nil {
 			t.Fatalf("log entry %d: %v", i, err)
 		}
 	}
