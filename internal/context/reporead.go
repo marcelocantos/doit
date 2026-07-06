@@ -60,15 +60,47 @@ func ReadRepoFile(projectRoot, filename string) ([]byte, error) {
 	full := filepath.Join(projectRoot, filepath.FromSlash(filename))
 	clean := filepath.Clean(full)
 	rootClean := filepath.Clean(projectRoot)
-	if !strings.HasPrefix(clean, rootClean+string(os.PathSeparator)) && clean != rootClean {
+	if !within(clean, rootClean) {
 		return nil, fmt.Errorf("doit: repo read: %q: path escapes project root", filename)
 	}
 
-	data, err := os.ReadFile(clean)
+	// Lexical containment is not enough: filepath.Clean never resolves
+	// symlinks, and os.ReadFile follows them. An agent that can write the repo
+	// could point an allowlisted name (e.g. go.mod) at a file outside the root
+	// and exfiltrate it (Fable-5 F6 / 🎯T45). Resolve symlinks on both the root
+	// and the target, then re-verify containment against the resolved paths.
+	rootResolved, err := filepath.EvalSymlinks(rootClean)
+	if err != nil {
+		// Root itself does not resolve (missing / broken link); fall back to the
+		// lexical root so a legitimately-absent file still yields a read error
+		// below rather than a spurious containment pass.
+		rootResolved = rootClean
+	}
+	resolved, err := filepath.EvalSymlinks(clean)
+	if err != nil {
+		// The file is missing or the link is dangling. There is no existing
+		// escape target to leak; surface the read error directly (O_NOFOLLOW is
+		// unnecessary because a dangling link cannot be read either).
+		data, rerr := os.ReadFile(clean)
+		if rerr != nil {
+			return nil, fmt.Errorf("doit: repo read: %w", rerr)
+		}
+		return data, nil
+	}
+	if !within(resolved, rootResolved) {
+		return nil, fmt.Errorf("doit: repo read: %q: path escapes project root", filename)
+	}
+
+	data, err := os.ReadFile(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("doit: repo read: %w", err)
 	}
 	return data, nil
+}
+
+// within reports whether path is rootClean itself or lies beneath it.
+func within(path, rootClean string) bool {
+	return path == rootClean || strings.HasPrefix(path, rootClean+string(os.PathSeparator))
 }
 
 // IsGeneratedDir checks whether dir (relative to projectRoot) is listed in

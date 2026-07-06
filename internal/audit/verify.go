@@ -38,13 +38,13 @@ func Verify(path string) error {
 
 		// Check prev_hash chain.
 		if entry.PrevHash != expectedPrev {
-			return fmt.Errorf("line %d: prev_hash mismatch: expected %s, got %s", i+1, expectedPrev[:16]+"...", entry.PrevHash[:16]+"...")
+			return fmt.Errorf("line %d: prev_hash mismatch: expected %s, got %s", i+1, shortHash(expectedPrev), shortHash(entry.PrevHash))
 		}
 
 		// Recompute and check hash.
 		computed := computeHash(entry)
 		if entry.Hash != computed {
-			return fmt.Errorf("line %d: hash mismatch: expected %s, got %s", i+1, computed[:16]+"...", entry.Hash[:16]+"...")
+			return fmt.Errorf("line %d: hash mismatch: expected %s, got %s", i+1, shortHash(computed), shortHash(entry.Hash))
 		}
 
 		expectedPrev = entry.Hash
@@ -52,6 +52,18 @@ func Verify(path string) error {
 	}
 
 	return nil
+}
+
+// shortHash renders a hash prefix for error messages without ever slicing past
+// the end of the string. Entry-derived hash fields are untrusted (a tampered or
+// truncated line may carry an empty or short hash), so a fixed [:16] slice would
+// panic; clamping keeps Verify reporting the tamper instead of crashing.
+func shortHash(s string) string {
+	const n = 16
+	if len(s) < n {
+		return s + "..."
+	}
+	return s[:n] + "..."
 }
 
 // Tail returns the last n entries from the audit log.

@@ -52,6 +52,7 @@ func TestCapture_DefaultNoExcerptOnSuccess(t *testing.T) {
 
 	result := eng.Execute(context.Background(), Request{
 		Command: "echo hello",
+		Retry:   true, // human-approved: reach execution under fail-closed policy
 	})
 	if result.ExitCode != 0 {
 		t.Fatalf("expected exit 0, got %d: %s", result.ExitCode, result.Stderr)
@@ -73,6 +74,7 @@ func TestCapture_FailedCommandProducesExcerpts(t *testing.T) {
 
 	result := eng.Execute(context.Background(), Request{
 		Command: "echo 'fail output' >&2; exit 1",
+		Retry:   true, // human-approved
 	})
 	if result.ExitCode == 0 {
 		t.Fatal("expected non-zero exit code")
@@ -93,6 +95,7 @@ func TestCapture_TruncationMarker(t *testing.T) {
 	// Generate output larger than 10 bytes (echo adds newline, so "123456789012" = 13 bytes).
 	result := eng.Execute(context.Background(), Request{
 		Command: "echo '123456789012'",
+		Retry:   true, // human-approved
 	})
 	if result.ExitCode != 0 {
 		t.Fatalf("expected exit 0, got %d: %s", result.ExitCode, result.Stderr)
@@ -120,6 +123,7 @@ func TestCapture_AlwaysCapturesSuccess(t *testing.T) {
 
 	result := eng.Execute(context.Background(), Request{
 		Command: "echo hello_world",
+		Retry:   true, // human-approved
 	})
 	if result.ExitCode != 0 {
 		t.Fatalf("expected exit 0, got %d: %s", result.ExitCode, result.Stderr)
@@ -140,6 +144,7 @@ func TestCapture_NeverCapturesNothing(t *testing.T) {
 	// Fail to confirm even failures produce no excerpts.
 	eng.Execute(context.Background(), Request{
 		Command: "echo fail_output; exit 2",
+		Retry:   true, // human-approved
 	})
 
 	entry := lastAuditEntry(t, auditPath)
@@ -182,6 +187,7 @@ func TestCapture_RedactedCapability(t *testing.T) {
 	// "mock-redact" but exit non-zero, triggering the failure path.
 	eng.Execute(context.Background(), Request{
 		Command: "mock-redact some-arg",
+		Retry:   true, // human-approved
 	})
 
 	entry := lastAuditEntry(t, auditPath)
@@ -202,6 +208,7 @@ func TestCapture_RedactedCapability(t *testing.T) {
 	eng2.reg.Register(&mockRedactCap{})
 	eng2.Execute(context.Background(), Request{
 		Command: "mock-redact some-arg",
+		Retry:   true, // human-approved
 	})
 	entry2 := lastAuditEntry(t, auditPath2)
 	if entry2.StdoutExcerpt != redactedMarker {

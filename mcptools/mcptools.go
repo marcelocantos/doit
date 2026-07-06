@@ -1008,10 +1008,15 @@ func handleRepoRead(eng *engine.Engine) server.ToolHandlerFunc {
 			return mcp.NewToolResultError("missing required parameter: filename"), nil
 		}
 
-		projectRoot := argString(args, "project_root")
+		// Confine reads to the engine's known project root when it has one,
+		// rather than trusting the agent-supplied project_root (Fable-5 F6 /
+		// 🎯T45). Only when the engine was constructed without a root (e.g. the
+		// stdio server binary) do we fall back to the agent value or cwd.
+		projectRoot := eng.ProjectRoot()
 		if projectRoot == "" {
-			// Fall back to cwd. (The engine's ProjectRoot is not stored separately;
-			// callers should pass project_root explicitly when known.)
+			projectRoot = argString(args, "project_root")
+		}
+		if projectRoot == "" {
 			var err error
 			projectRoot, err = os.Getwd()
 			if err != nil {

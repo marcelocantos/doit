@@ -96,7 +96,11 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "%s\n", msg)
 	})
 
-	srv := server.NewMCPServer("doit", version, server.WithElicitation())
+	// WithRecovery wraps every tool handler so a panic degrades to a tool
+	// error instead of crashing the whole stdio server process — defence in
+	// depth behind the panic-proofing of individual handlers (Fable-5 F5 /
+	// 🎯T42).
+	srv := server.NewMCPServer("doit", version, server.WithElicitation(), server.WithRecovery())
 	mcptools.Register(srv, eng)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)

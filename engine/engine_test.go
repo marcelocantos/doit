@@ -83,6 +83,7 @@ func TestExecute_SimpleCommand(t *testing.T) {
 	result := eng.Execute(context.Background(), Request{
 		Command: "cat",
 		Cwd:     t.TempDir(),
+		Retry:   true, // human-approved: reach execution under fail-closed policy
 	})
 	// cat with no stdin produces exit 0
 	if result.ExitCode != 0 {
@@ -98,6 +99,7 @@ func TestExecute_ShellExec(t *testing.T) {
 	result := eng.Execute(context.Background(), Request{
 		Command: "cat hello.txt",
 		Cwd:     dir,
+		Retry:   true, // human-approved
 	})
 	if result.ExitCode != 0 {
 		t.Errorf("expected exit code 0, got %d; stderr: %s", result.ExitCode, result.Stderr)
@@ -116,6 +118,7 @@ func TestExecute_ShellExec_Pipeline(t *testing.T) {
 	result := eng.Execute(context.Background(), Request{
 		Command: "cat data.txt | grep beta",
 		Cwd:     dir,
+		Retry:   true, // human-approved
 	})
 	if result.ExitCode != 0 {
 		t.Errorf("expected exit code 0, got %d; stderr: %s", result.ExitCode, result.Stderr)
@@ -130,6 +133,7 @@ func TestExecute_ShellExec_ExitCode(t *testing.T) {
 
 	result := eng.Execute(context.Background(), Request{
 		Command: "exit 42",
+		Retry:   true, // human-approved
 	})
 	if result.ExitCode != 42 {
 		t.Errorf("expected exit code 42, got %d", result.ExitCode)
@@ -142,6 +146,7 @@ func TestExecute_ShellExec_Env(t *testing.T) {
 	result := eng.Execute(context.Background(), Request{
 		Command: "echo $DOIT_TEST_VAR",
 		Env:     map[string]string{"DOIT_TEST_VAR": "hello_doit"},
+		Retry:   true, // human-approved
 	})
 	if result.ExitCode != 0 {
 		t.Errorf("expected exit code 0, got %d; stderr: %s", result.ExitCode, result.Stderr)
@@ -156,8 +161,9 @@ func TestExecute_ArgsUsePipeline(t *testing.T) {
 
 	// When Args is set, should use pipeline parser (legacy path), not sh -c.
 	result := eng.Execute(context.Background(), Request{
-		Args: []string{"cat"},
-		Cwd:  t.TempDir(),
+		Args:  []string{"cat"},
+		Cwd:   t.TempDir(),
+		Retry: true, // human-approved
 	})
 	if result.ExitCode != 0 {
 		t.Errorf("expected exit code 0 via pipeline path, got %d; stderr: %s", result.ExitCode, result.Stderr)
@@ -194,6 +200,7 @@ func TestExecuteStreaming(t *testing.T) {
 	result := eng.ExecuteStreaming(context.Background(), Request{
 		Command: "cat",
 		Cwd:     t.TempDir(),
+		Retry:   true, // human-approved
 	}, &stdout, &stderr)
 	if result.ExitCode != 0 {
 		t.Errorf("expected exit code 0, got %d; stderr: %s", result.ExitCode, stderr.String())
