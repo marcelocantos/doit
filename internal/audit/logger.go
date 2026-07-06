@@ -99,9 +99,14 @@ func (l *Logger) Log(pipeline string, segments, tiers []string, exitCode int, er
 		return 0, nil // silently skip when size limit reached (warning already logged)
 	}
 
-	l.seq++
+	// Build the candidate entry from locals; do NOT advance l.seq/l.prevHash
+	// until the write succeeds. Advancing before the write would leave
+	// in-memory chain state ahead of disk on any partial/failed write,
+	// producing a permanent sequence gap or orphaned prev_hash that Verify
+	// rejects forever (Fable-5 F4 / 🎯T43).
+	nextSeq := l.seq + 1
 	entry := Entry{
-		Seq:      l.seq,
+		Seq:      nextSeq,
 		Time:     time.Now().UTC(),
 		PrevHash: l.prevHash,
 		Pipeline: pipeline,
@@ -139,7 +144,6 @@ func (l *Logger) Log(pipeline string, segments, tiers []string, exitCode int, er
 
 	// Compute hash with Hash field empty.
 	entry.Hash = computeHash(entry)
-	l.prevHash = entry.Hash
 
 	data, err := json.Marshal(entry)
 	if err != nil {
@@ -156,6 +160,13 @@ func (l *Logger) Log(pipeline string, segments, tiers []string, exitCode int, er
 	if _, err := f.Write(data); err != nil {
 		return 0, fmt.Errorf("write audit entry: %w", err)
 	}
+
+	// Only now that the entry is durably appended do we advance the in-memory
+	// chain state. On any earlier error we returned without touching
+	// l.seq/l.prevHash, so the next Log resumes cleanly from the last
+	// persisted entry.
+	l.seq = nextSeq
+	l.prevHash = entry.Hash
 	return entry.Seq, nil
 }
 

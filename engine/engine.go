@@ -524,7 +524,8 @@ func (e *Engine) Evaluate(ctx context.Context, req Request) *EvalResult {
 		}
 	}
 
-	result, _, _, _ := e.evaluatePolicy(ctx, args, req)
+	// Dry-run: do not consume an approval token (Fable-5 F2 / 🎯T46).
+	result, _, _, _ := e.evaluatePolicy(ctx, args, req, false)
 	if result == nil {
 		return &EvalResult{
 			Decision: "escalate",
@@ -723,7 +724,7 @@ func (e *Engine) runScriptCommand(ctx context.Context, req Request, sg scriptGat
 		if req.ExpectedDurationSeconds > 0 {
 			opts.ExpectedDuration = float64(req.ExpectedDurationSeconds) * 1000.0
 		}
-		_, _ = e.logger.Log(cmdStr, []string{sg.Invocation.Interpreter}, []string{"script"}, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
+		e.surfaceLog(cmdStr, []string{sg.Invocation.Interpreter}, []string{"script"}, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
 	}
 	return exitCode
 }
@@ -743,7 +744,7 @@ func (e *Engine) logScriptEvent(req Request, decision, ruleID, hash, scriptPath,
 		ScriptHash:    hash,
 		ScriptPath:    scriptPath,
 	}
-	_, _ = e.logger.Log(req.Command, nil, nil, exitCode, reason, 0, req.Cwd, req.Retry, opts)
+	e.surfaceLog(req.Command, nil, nil, exitCode, reason, 0, req.Cwd, req.Retry, opts)
 }
 
 // Execute evaluates policy and, if allowed, runs the command via sh -c.
@@ -756,8 +757,8 @@ func (e *Engine) Execute(ctx context.Context, req Request) *Result {
 
 	args := req.args()
 
-	// Policy evaluation.
-	pResult, segments, tiers, l3ev := e.evaluatePolicy(ctx, args, req)
+	// Policy evaluation (real execution path consumes any approval token).
+	pResult, segments, tiers, l3ev := e.evaluatePolicy(ctx, args, req, true)
 
 	wasL3 := false
 	if pResult != nil {
@@ -795,6 +796,23 @@ func (e *Engine) Execute(ctx context.Context, req Request) *Result {
 				PolicyDecision: pResult.Decision.String(),
 				PolicyReason:   pResult.Reason,
 				EscalateToken:  token,
+			}
+		}
+
+		// Fail closed: any non-Allow decision that reaches this point (an
+		// Escalate at L1/L2, or an L3 Escalate when no token store exists) must
+		// never execute. This is the resting state whenever L3 is disabled/nil,
+		// and previously fell straight through to runCommand (Fable-5 F1 /
+		// 🎯T40 — the critical fail-open bug).
+		if pResult.Decision != policy.Allow {
+			e.logPolicyResult(req, args, pResult, segments, tiers, 1, l3ev)
+			return &Result{
+				ExitCode:       1,
+				Stderr:         fmt.Sprintf("doit: policy: %s (no approval handler; failing closed)", pResult.Reason),
+				PolicyLevel:    pResult.Level,
+				PolicyDecision: pResult.Decision.String(),
+				PolicyReason:   pResult.Reason,
+				PolicyRuleID:   pResult.RuleID,
 			}
 		}
 
@@ -844,7 +862,7 @@ func (e *Engine) ExecuteStreaming(ctx context.Context, req Request, stdout, stde
 
 	args := req.args()
 
-	pResult, segments, tiers, l3ev := e.evaluatePolicy(ctx, args, req)
+	pResult, segments, tiers, l3ev := e.evaluatePolicy(ctx, args, req, true)
 
 	wasL3 := false
 	if pResult != nil {
@@ -880,6 +898,19 @@ func (e *Engine) ExecuteStreaming(ctx context.Context, req Request, stdout, stde
 				PolicyDecision: pResult.Decision.String(),
 				PolicyReason:   pResult.Reason,
 				EscalateToken:  token,
+			}
+		}
+
+		// Fail closed on any remaining non-Allow decision (Fable-5 F1 / 🎯T40).
+		if pResult.Decision != policy.Allow {
+			e.logPolicyResult(req, args, pResult, segments, tiers, 1, l3ev)
+			fmt.Fprintf(stderr, "doit: policy: %s (no approval handler; failing closed)\n", pResult.Reason)
+			return &Result{
+				ExitCode:       1,
+				PolicyLevel:    pResult.Level,
+				PolicyDecision: pResult.Decision.String(),
+				PolicyReason:   pResult.Reason,
+				PolicyRuleID:   pResult.RuleID,
 			}
 		}
 
@@ -1004,6 +1035,14 @@ func (e *Engine) StorePath() string {
 	return e.storePath
 }
 
+// ProjectRoot returns the engine's normalised project root, or "" when the
+// engine was constructed without one. doit_repo_read uses this to confine reads
+// to a known root instead of trusting an agent-supplied project_root
+// (Fable-5 F6 / 🎯T45).
+func (e *Engine) ProjectRoot() string {
+	return e.projectRoot
+}
+
 // StarlarkRulesDir returns the configured Starlark rules directory.
 func (e *Engine) StarlarkRulesDir() string {
 	return e.cfg.Policy.StarlarkRulesDir
@@ -1063,7 +1102,7 @@ func (e *Engine) ApproveScript(hash, pathHint, justification string) (*script.Ap
 			ScriptHash:    hash,
 			ScriptPath:    pathHint,
 		}
-		_, _ = e.logger.Log("<script-approval>", []string{"script"}, []string{"script"}, 0, "", 0, "", false, opts)
+		e.surfaceLog("<script-approval>", []string{"script"}, []string{"script"}, 0, "", 0, "", false, opts)
 	}
 	return entry, nil
 }
@@ -1081,7 +1120,7 @@ func (e *Engine) RevokeScriptApproval(hash string) error {
 			PolicyRuleID: "script-hash-revoked",
 			ScriptHash:   hash,
 		}
-		_, _ = e.logger.Log("<script-revocation>", []string{"script"}, []string{"script"}, 0, "", 0, "", false, opts)
+		e.surfaceLog("<script-revocation>", []string{"script"}, []string{"script"}, 0, "", 0, "", false, opts)
 	}
 	return nil
 }
@@ -1497,13 +1536,23 @@ func upperFirst(s string) string {
 	return strings.ToUpper(s[:1]) + s[1:]
 }
 
-// ValidateApproval checks an approval token. Returns nil on success.
+// ValidateApproval checks an approval token WITHOUT consuming it, so the token
+// survives to authorise the subsequent execution it was validated for (Fable-5
+// F8 / 🎯T47). It also rejects tokens lacking human-approval provenance so a
+// self-issued escalation token cannot be laundered through doit_approve
+// (Fable-5 F3 / 🎯T41). Returns nil on success.
 func (e *Engine) ValidateApproval(token string, args []string) error {
 	if e.tokenStore == nil {
 		return fmt.Errorf("approval tokens not enabled (L3 disabled)")
 	}
-	_, err := e.tokenStore.Validate(token, args)
-	return err
+	entry, err := e.tokenStore.Peek(token, args)
+	if err != nil {
+		return err
+	}
+	if !entry.HumanApproved {
+		return fmt.Errorf("approval token lacks human-approval provenance")
+	}
+	return nil
 }
 
 // --- internal ---
@@ -1518,19 +1567,42 @@ func (req *Request) args() []string {
 	return nil
 }
 
-func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request) (result *policy.Result, segments, tiers []string, l3ev *policy.CascadeEvidence) {
+// evaluatePolicy runs the L1/L2/L3 policy chain. consumeToken selects whether a
+// presented approval token is consumed (single-use) — true on the real Execute
+// path, false on the dry-run Evaluate path so the token survives to authorise
+// the subsequent execution (Fable-5 F2 / 🎯T46).
+func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request, consumeToken bool) (result *policy.Result, segments, tiers []string, l3ev *policy.CascadeEvidence) {
 	if len(args) == 0 {
 		return nil, nil, nil, nil
 	}
 
 	// Token validation first.
 	if req.Approved != "" && e.tokenStore != nil {
-		_, err := e.tokenStore.Validate(req.Approved, args)
+		var (
+			entry *policy.TokenEntry
+			err   error
+		)
+		if consumeToken {
+			entry, err = e.tokenStore.Validate(req.Approved, args)
+		} else {
+			entry, err = e.tokenStore.Peek(req.Approved, args)
+		}
 		if err != nil {
 			return &policy.Result{
 				Decision: policy.Deny,
 				Level:    3,
 				Reason:   fmt.Sprintf("invalid approval token: %v", err),
+				RuleID:   "approval-token",
+			}, nil, nil, nil
+		}
+		// Only human-approved tokens authorise execution. Engine-self-issued
+		// escalation tokens carry no human provenance and must not let the agent
+		// replay them to self-approve (Fable-5 F3 / 🎯T41).
+		if !entry.HumanApproved {
+			return &policy.Result{
+				Decision: policy.Deny,
+				Level:    3,
+				Reason:   "approval token lacks human-approval provenance",
 				RuleID:   "approval-token",
 			}, nil, nil, nil
 		}
@@ -1624,6 +1696,24 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 
 		elapsed := time.Since(t0)
 		log.Printf("doit: L3 LLM call completed in %v: %s (%s)", elapsed, result.Decision, result.Reason)
+	}
+
+	// Human-approved retry authorises an otherwise-escalated command. req.Retry
+	// is set only by the elicitation accept path (allow_once/allow_always) and
+	// is NOT reachable from agent-supplied MCP arguments, so it is a trusted
+	// "human approved" signal. L3 already applies this shortcut when present
+	// (level3.go); replicating it here means the human-approval path still
+	// resolves to Allow when L3 is disabled or nil, instead of falling through
+	// to the fail-closed guard in Execute (Fable-5 F1 / 🎯T40). A non-bypassable
+	// deny (e.g. deny-rm-catastrophic) already returned Deny above and is
+	// unaffected.
+	if result != nil && result.Decision == policy.Escalate && req.Retry {
+		result = &policy.Result{
+			Decision: policy.Allow,
+			Level:    result.Level,
+			Reason:   "approved via explicit retry",
+			RuleID:   result.RuleID,
+		}
 	}
 	return result, segments, tiers, l3ev
 }
@@ -1781,7 +1871,18 @@ func (e *Engine) logExecutionWithExcerpts(ctx context.Context, cmdStr string, se
 	opts.ProjectRoot = e.projectRoot
 	opts.StdoutExcerpt = stdoutExcerpt
 	opts.StderrExcerpt = stderrExcerpt
-	seq, _ := e.logger.Log(cmdStr, segments, tiers, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
+	return e.surfaceLog(cmdStr, segments, tiers, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
+}
+
+// surfaceLog appends an audit entry and logs (rather than silently discarding)
+// any write error. The audit log is doit's security-of-record; a failed append
+// must not pass unnoticed (Fable-5 F4 / 🎯T43). Returns the assigned sequence
+// number (0 when the write failed).
+func (e *Engine) surfaceLog(pipeline string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, cwd string, retry bool, opts *audit.LogOptions) uint64 {
+	seq, err := e.logger.Log(pipeline, segments, tiers, exitCode, errMsg, duration, cwd, retry, opts)
+	if err != nil {
+		log.Printf("doit: audit: failed to record entry for %q: %v", pipeline, err)
+	}
 	return seq
 }
 
@@ -1800,7 +1901,7 @@ func (e *Engine) logPolicyResult(req Request, args []string, result *policy.Resu
 		opts.L3Fast = l3ev.Fast
 		opts.L3Deep = l3ev.Deep
 	}
-	_, _ = e.logger.Log(
+	e.surfaceLog(
 		strings.Join(args, " "),
 		segments, tiers,
 		exitCode, result.Reason,

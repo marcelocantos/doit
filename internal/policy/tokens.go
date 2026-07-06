@@ -20,6 +20,12 @@ type TokenEntry struct {
 	Args      []string
 	CreatedAt time.Time
 	ExpiresAt time.Time
+	// HumanApproved is true only for tokens minted as the result of a human
+	// approval decision (IssueApproved). Engine-self-issued escalation tokens
+	// (Issue) carry false, so the agent that requested the escalated command
+	// cannot replay the very token it was handed to self-approve it
+	// (Fable-5 F3 / 🎯T41).
+	HumanApproved bool
 }
 
 // TokenStore manages time-limited, single-use approval tokens.
@@ -36,9 +42,21 @@ func NewTokenStore(ttl time.Duration) *TokenStore {
 	}
 }
 
-// Issue generates a new approval token for the given command and args.
-// Returns a hex-encoded 128-bit random token string.
+// Issue generates a new NON-human-approved token for the given command and
+// args (used by the engine's escalation path, which has no human in the loop).
+// A token issued here cannot authorise execution on its own — see the provenance
+// check in engine.evaluatePolicy. Returns a hex-encoded 128-bit token string.
 func (s *TokenStore) Issue(command string, args []string) (string, error) {
+	return s.issue(command, args, false)
+}
+
+// IssueApproved generates a token carrying human-approval provenance. Only these
+// tokens authorise execution when replayed via the approval flow.
+func (s *TokenStore) IssueApproved(command string, args []string) (string, error) {
+	return s.issue(command, args, true)
+}
+
+func (s *TokenStore) issue(command string, args []string, humanApproved bool) (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", err
@@ -48,10 +66,11 @@ func (s *TokenStore) Issue(command string, args []string) (string, error) {
 	now := time.Now()
 	s.mu.Lock()
 	s.tokens[token] = &TokenEntry{
-		Command:   command,
-		Args:      args,
-		CreatedAt: now,
-		ExpiresAt: now.Add(s.ttl),
+		Command:       command,
+		Args:          args,
+		CreatedAt:     now,
+		ExpiresAt:     now.Add(s.ttl),
+		HumanApproved: humanApproved,
 	}
 	s.mu.Unlock()
 
@@ -61,6 +80,17 @@ func (s *TokenStore) Issue(command string, args []string) (string, error) {
 // Validate checks the token and consumes it (single-use). Returns the entry on success.
 // It also purges any expired tokens to keep the store bounded.
 func (s *TokenStore) Validate(token string, args []string) (*TokenEntry, error) {
+	return s.check(token, args, true)
+}
+
+// Peek checks the token WITHOUT consuming it, so a dry-run policy evaluation can
+// inspect the same token that the real execution will later consume exactly once
+// (Fable-5 F2/F8 · 🎯T46/🎯T47). Returns the entry on success.
+func (s *TokenStore) Peek(token string, args []string) (*TokenEntry, error) {
+	return s.check(token, args, false)
+}
+
+func (s *TokenStore) check(token string, args []string, consume bool) (*TokenEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -77,8 +107,12 @@ func (s *TokenStore) Validate(token string, args []string) (*TokenEntry, error) 
 		return nil, errors.New("unknown or expired approval token")
 	}
 
-	// Delete immediately — single use regardless of outcome.
-	delete(s.tokens, token)
+	// A consuming check is single-use regardless of outcome (historical
+	// Validate semantics). Peek (consume=false) never deletes, so the token
+	// survives a dry-run evaluation to authorise the subsequent execution.
+	if consume {
+		delete(s.tokens, token)
+	}
 
 	if time.Now().After(entry.ExpiresAt) {
 		return nil, errors.New("approval token expired")

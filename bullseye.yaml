@@ -711,9 +711,10 @@ targets:
     discovered: 2026-04-09
   T40:
     name: doit fails closed on any non-Allow policy result — an Escalate/uncertain verdict never reaches command execution
-    status: identified
+    status: achieved
     value: 13.0
     cost: 3.0
+    actual_cost: 4.0
     acceptance:
     - Execute and ExecuteStreaming return a non-zero exit with no command side effect whenever the policy result is not Allow (including Escalate at L1/L2 when L3 is disabled or nil)
     - 'Regression test: engine built with level3_enabled:false, Execute on a novel command creates no marker file and exits non-zero'
@@ -721,22 +722,26 @@ targets:
     context: CRITICAL fail-open. engine.Execute (engine/engine.go:779) only special-cases Deny and Escalate-with-Level==3; an Escalate result at L1/L2 (the common case when L3 is disabled) falls through both guards and executes the command. Unverified candidate from the Fable-5 audit finder stage 2026-07 (two-lens adversarial verification was interrupted by an API spend limit), but the finder reproduced it end-to-end. Detail + fix sketch in docs/audit/fable-2026-07.md.
     origin: manual
     discovered: 2026-07-02
+    achieved: 2026-07-06
   T41:
     name: doit approval tokens are minted only by the human approval step; a self-issued token cannot be replayed to authorize execution
-    status: identified
+    status: achieved
     value: 8.0
     cost: 3.0
+    actual_cost: 2.0
     acceptance:
     - evaluatePolicy rejects any approval token that lacks human-approval provenance
     - 'Regression test: a single Execute(command, approved=engine-issued token) does not return an allow decision'
     context: 'engine/engine.go:781. The engine self-issues escalation tokens and returns them to the caller; a direct Engine.Execute consumer can replay the token to self-approve the escalated command (finder result: "SELF-APPROVAL CONFIRMED"). Unverified Fable-5 finder-stage candidate (adversarial verification interrupted by an API spend limit), finder-reproduced. See docs/audit/fable-2026-07.md.'
     origin: manual
     discovered: 2026-07-02
+    achieved: 2026-07-06
   T42:
     name: doit_audit_verify reports tamper instead of panicking on a truncated or short hash field
-    status: identified
+    status: achieved
     value: 8.0
     cost: 3.0
+    actual_cost: 2.0
     acceptance:
     - audit.Verify returns a non-nil error (no panic) when an entry's hash or prev_hash is empty or shorter than 16 chars
     - Unit test asserts Verify returns an error (not a panic) on a short-hash line
@@ -744,11 +749,13 @@ targets:
     context: internal/audit/verify.go:41,47 slice PrevHash[:16]/Hash[:16] on untrusted entries; a short or empty hash panics and crashes the doit MCP server. Two finders independently found this. Unverified Fable-5 finder-stage candidate (verification interrupted by spend limit), finder-reproduced ("slice bounds out of range"). See docs/audit/fable-2026-07.md.
     origin: manual
     discovered: 2026-07-02
+    achieved: 2026-07-06
   T43:
     name: doit audit log advances seq and prev_hash only after a successful write, keeping the on-disk chain gap-free
-    status: identified
+    status: achieved
     value: 8.0
     cost: 3.0
+    actual_cost: 3.0
     acceptance:
     - Logger.Log persists the entry to disk before mutating l.seq/l.prevHash and leaves them unchanged on any write error
     - Callers surface the Log error instead of discarding it
@@ -756,22 +763,26 @@ targets:
     context: internal/audit/logger.go:102 increments seq and advances prevHash before the file write; a partial or failed write leaves in-memory state ahead of disk, creating a permanent sequence gap or orphaned prev_hash that Verify rejects forever. Unverified Fable-5 finder-stage candidate. See docs/audit/fable-2026-07.md.
     origin: manual
     discovered: 2026-07-02
+    achieved: 2026-07-06
   T44:
     name: doit L2 learned-policy store serializes read-modify-write so concurrent updates never drop entries
-    status: identified
+    status: achieved
     value: 8.0
     cost: 3.0
+    actual_cost: 3.0
     acceptance:
     - All L2 store mutations hold a single lock across the LoadStore+SaveStore span, with an advisory file lock for cross-process safety
     - go test -race with N concurrent AppendEntries persists exactly N entries
     context: internal/policy/store.go:133. RecordDecision and background tryPromote both do load-modify-save with no shared lock, so concurrent writes drop human deny_always/allow_always decisions and auto-promoted rules. Unverified Fable-5 finder-stage candidate. See docs/audit/fable-2026-07.md.
     origin: manual
     discovered: 2026-07-02
+    achieved: 2026-07-06
   T45:
     name: doit_repo_read resolves symlinks and confines reads to the project root, enforcing its allowlist
-    status: identified
+    status: achieved
     value: 8.0
     cost: 3.0
+    actual_cost: 2.0
     acceptance:
     - ReadRepoFile calls EvalSymlinks and rejects any path resolving outside an EvalSymlinks'd project root
     - project_root is constrained to the engine's known root rather than trusted from the agent
@@ -779,28 +790,33 @@ targets:
     context: internal/context/reporead.go:63 follows symlinks and trusts an agent-supplied project_root, letting the read allowlist be escaped to exfiltrate arbitrary files. Unverified Fable-5 finder-stage candidate, finder-reproduced. See docs/audit/fable-2026-07.md.
     origin: manual
     discovered: 2026-07-02
+    achieved: 2026-07-06
   T46:
     name: doit dry-run policy evaluation does not consume the single-use approval token, so an approved execute succeeds
-    status: identified
+    status: achieved
     value: 8.0
     cost: 3.0
+    actual_cost: 2.0
     acceptance:
     - The Evaluate/dry-run path does not consume approval tokens; consumption happens only on the real Execute path
     - 'Regression: Issue a token for a command, then Evaluate followed by Execute with it — Execute returns allow'
     context: engine/engine.go:1528. The Phase-1 dry-run Evaluate consumes the single-use token, so the subsequent real Execute always denies with "invalid approval token". Fix must be coordinated with T41 so it does not open self-approval. Unverified Fable-5 finder-stage candidate, finder-reproduced. See docs/audit/fable-2026-07.md.
     origin: manual
     discovered: 2026-07-02
+    achieved: 2026-07-06
   T47:
     name: doit_approve validates an approval token without consuming it, so the approve-then-execute flow succeeds
-    status: identified
+    status: achieved
     value: 8.0
     cost: 3.0
+    actual_cost: 1.0
     acceptance:
     - doit_approve uses a non-consuming check so the token survives to authorize the subsequent Execute
     - 'Regression: ValidateApproval then Execute with the same token — Execute returns allow'
     context: mcptools/mcptools.go:635. doit_approve consumes the token during validation, so the approve-then-execute sequence always denies. Unverified Fable-5 finder-stage candidate, finder-reproduced. See docs/audit/fable-2026-07.md.
     origin: manual
     discovered: 2026-07-02
+    achieved: 2026-07-06
   T5:
     name: Test coverage for core packages
     status: achieved

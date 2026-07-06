@@ -112,7 +112,12 @@ func TestIntegration_DryRun_Deny(t *testing.T) {
 }
 
 func TestIntegration_Execute_ReadOnly(t *testing.T) {
-	c := newMCPClient(t)
+	// A bare read command escalates (opaque-string policy); under the
+	// fail-closed model it only executes once a human approves. Drive the real
+	// approved-execute path via an auto-accepting elicitation handler
+	// (allow_once), which is the end-to-end happy path.
+	handler := &mockServerElicitationHandler{phase1Decision: "allow_once"}
+	c, _ := newElicitationClient(t, handler)
 	ctx := context.Background()
 
 	// Create a temp file to cat.
