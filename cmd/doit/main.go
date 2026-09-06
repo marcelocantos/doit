@@ -96,7 +96,7 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "%s\n", msg)
 	})
 
-	srv := server.NewMCPServer("doit", version, server.WithElicitation())
+	srv := newMCPServer(version)
 	mcptools.Register(srv, eng)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -109,4 +109,12 @@ func run() int {
 	}
 
 	return 0
+}
+
+// newMCPServer builds the doit MCP server with the capabilities the
+// tools rely on: elicitation for policy decisions, and panic recovery
+// so a bug in one handler (or a hostile audit line) degrades to a tool
+// error instead of killing the gateway (🎯T42).
+func newMCPServer(version string) *server.MCPServer {
+	return server.NewMCPServer("doit", version, server.WithElicitation(), server.WithRecovery())
 }

@@ -456,3 +456,31 @@ func TestElicitationFields(t *testing.T) {
 		t.Errorf("policy_result=%q, want proposal_accepted", promotion.PolicyResult)
 	}
 }
+
+// TestVerifyShortHashDoesNotPanic is the 🎯T42 regression: a tampered or
+// truncated hash field must be reported, not crash the server.
+func TestVerifyShortHashDoesNotPanic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+	logger, err := NewLogger(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := logger.Log("first", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, line := range map[string]string{
+		"short prev_hash": `{"seq":2,"time":"2026-01-01T00:00:00Z","prev_hash":"abc","pipeline":"x","hash":"def"}`,
+		"empty hashes":    `{"seq":2,"time":"2026-01-01T00:00:00Z","prev_hash":"","pipeline":"x","hash":""}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			data, _ := os.ReadFile(path)
+			tampered := filepath.Join(dir, strings.ReplaceAll(name, " ", "-")+".jsonl")
+			os.WriteFile(tampered, append(data, []byte(line+"\n")...), 0600)
+			if err := Verify(tampered); err == nil {
+				t.Fatal("expected Verify to report the tampered line")
+			}
+		})
+	}
+}
