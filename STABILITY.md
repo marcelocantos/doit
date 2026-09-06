@@ -17,7 +17,7 @@ Snapshot as of v0.9.0.
 |---|---|---|
 | `doit_execute` | command, justification, safety_arg, cwd, approved, timeout_seconds, expected_duration_seconds | Stable |
 | `doit_dry_run` | command, justification, safety_arg, cwd, timeout_seconds, expected_duration_seconds | Stable |
-| `doit_approve` | token, command | Stable |
+| `doit_approve` | token, command | Stable (behaviour changed: prompts the user and no longer consumes the token) |
 
 **Work sessions**
 

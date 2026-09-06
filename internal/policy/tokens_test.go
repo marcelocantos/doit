@@ -4,6 +4,7 @@
 package policy
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -16,9 +17,12 @@ func TestTokenIssueAndValidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
-	entry, err := store.Validate(token, args)
+	if err := store.Approve(token); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	entry, err := store.Consume(token, args)
 	if err != nil {
-		t.Fatalf("Validate: %v", err)
+		t.Fatalf("Consume: %v", err)
 	}
 	if entry.Command != "git push" {
 		t.Errorf("Command = %q, want %q", entry.Command, "git push")
@@ -35,15 +39,18 @@ func TestTokenSingleUse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
-	if _, err := store.Validate(token, args); err != nil {
-		t.Fatalf("first Validate: %v", err)
+	if err := store.Approve(token); err != nil {
+		t.Fatalf("Approve: %v", err)
 	}
-	_, err = store.Validate(token, args)
+	if _, err := store.Consume(token, args); err != nil {
+		t.Fatalf("first Consume: %v", err)
+	}
+	_, err = store.Consume(token, args)
 	if err == nil {
-		t.Fatal("second Validate: expected error, got nil")
+		t.Fatal("second Consume: expected error, got nil")
 	}
 	if !strings.Contains(err.Error(), "unknown or expired") {
-		t.Errorf("second Validate error = %q, want 'unknown or expired'", err)
+		t.Errorf("second Consume error = %q, want 'unknown or expired'", err)
 	}
 }
 
@@ -54,13 +61,16 @@ func TestTokenExpired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
+	if err := store.Approve(token); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
 	time.Sleep(5 * time.Millisecond)
-	_, err = store.Validate(token, args)
+	_, err = store.Consume(token, args)
 	if err == nil {
-		t.Fatal("Validate: expected error for expired token, got nil")
+		t.Fatal("Consume: expected error for expired token, got nil")
 	}
 	if !strings.Contains(err.Error(), "expired") {
-		t.Errorf("Validate error = %q, want 'expired'", err)
+		t.Errorf("Consume error = %q, want 'expired'", err)
 	}
 }
 
@@ -70,23 +80,26 @@ func TestTokenArgsMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
-	_, err = store.Validate(token, []string{"push"})
+	if err := store.Approve(token); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	_, err = store.Consume(token, []string{"push"})
 	if err == nil {
-		t.Fatal("Validate: expected error for args mismatch, got nil")
+		t.Fatal("Consume: expected error for args mismatch, got nil")
 	}
 	if !strings.Contains(err.Error(), "mismatch") {
-		t.Errorf("Validate error = %q, want 'mismatch'", err)
+		t.Errorf("Consume error = %q, want 'mismatch'", err)
 	}
 }
 
 func TestTokenUnknown(t *testing.T) {
 	store := NewTokenStore(DefaultTokenTTL)
-	_, err := store.Validate("deadbeefdeadbeefdeadbeefdeadbeef", []string{})
+	_, err := store.Consume("deadbeefdeadbeefdeadbeefdeadbeef", []string{})
 	if err == nil {
-		t.Fatal("Validate: expected error for unknown token, got nil")
+		t.Fatal("Consume: expected error for unknown token, got nil")
 	}
 	if !strings.Contains(err.Error(), "unknown or expired") {
-		t.Errorf("Validate error = %q, want 'unknown or expired'", err)
+		t.Errorf("Consume error = %q, want 'unknown or expired'", err)
 	}
 }
 
@@ -116,15 +129,18 @@ func TestTokenPurge(t *testing.T) {
 	store.Purge()
 
 	// tok1 and tok2 should be gone.
-	if _, err := store.Validate(tok1, []string{"a"}); err == nil {
+	if _, err := store.Consume(tok1, []string{"a"}); err == nil {
 		t.Error("tok1 should have been purged but validated successfully")
 	}
-	if _, err := store.Validate(tok2, []string{"b"}); err == nil {
+	if _, err := store.Consume(tok2, []string{"b"}); err == nil {
 		t.Error("tok2 should have been purged but validated successfully")
 	}
 
-	// tok3 in freshStore should still be valid.
-	if _, err := freshStore.Validate(tok3, []string{"c"}); err != nil {
+	// tok3 in freshStore should still be valid once a human approves it.
+	if err := freshStore.Approve(tok3); err != nil {
+		t.Fatalf("Approve tok3: %v", err)
+	}
+	if _, err := freshStore.Consume(tok3, []string{"c"}); err != nil {
 		t.Errorf("tok3 should still be valid: %v", err)
 	}
 }
@@ -141,5 +157,53 @@ func TestTokenIssueUniqueness(t *testing.T) {
 	}
 	if tok1 == tok2 {
 		t.Errorf("tokens are identical: %q", tok1)
+	}
+}
+
+// TestTokenIssuedIsNotApproved is the ENT-003 unit-level regression: the
+// token doit mints on escalation authorises nothing until a human
+// approves it, and a rejected attempt leaves the token in place so the
+// replay reports the same reason (🎯T41).
+func TestTokenIssuedIsNotApproved(t *testing.T) {
+	store := NewTokenStore(DefaultTokenTTL)
+	args := []string{"rm", "-rf", "/"}
+	token, err := store.Issue("rm -rf /", args)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		if _, err := store.Consume(token, args); !errors.Is(err, ErrAwaitingApproval) {
+			t.Fatalf("attempt %d: Consume = %v, want ErrAwaitingApproval", attempt, err)
+		}
+		if _, err := store.Check(token, args); !errors.Is(err, ErrAwaitingApproval) {
+			t.Fatalf("attempt %d: Check = %v, want ErrAwaitingApproval", attempt, err)
+		}
+	}
+}
+
+// TestTokenCheckDoesNotConsume: the non-consuming check leaves the single
+// use for the execution that follows (🎯T46/🎯T47).
+func TestTokenCheckDoesNotConsume(t *testing.T) {
+	store := NewTokenStore(DefaultTokenTTL)
+	args := []string{"git", "push"}
+	token, err := store.Issue("git push", args)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if err := store.Approve(token); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		if _, err := store.Check(token, args); err != nil {
+			t.Fatalf("Check %d: %v", i, err)
+		}
+	}
+	if _, err := store.Consume(token, args); err != nil {
+		t.Fatalf("Consume after Check: %v", err)
+	}
+	if _, err := store.Consume(token, args); err == nil {
+		t.Fatal("Consume should be single-use")
 	}
 }

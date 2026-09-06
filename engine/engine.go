@@ -535,7 +535,7 @@ func (e *Engine) Evaluate(ctx context.Context, req Request) *EvalResult {
 		}
 	}
 
-	result, _, _, _ := e.evaluatePolicy(ctx, args, req)
+	result, _, _, _ := e.evaluatePolicy(ctx, args, req, false)
 	if result == nil {
 		return &EvalResult{
 			Decision: "escalate",
@@ -782,7 +782,7 @@ func (e *Engine) Execute(ctx context.Context, req Request) *Result {
 	args := req.args()
 
 	// Policy evaluation.
-	pResult, segments, tiers, l3ev := e.evaluatePolicy(ctx, args, req)
+	pResult, segments, tiers, l3ev := e.evaluatePolicy(ctx, args, req, true)
 
 	if blocked, msg := e.policyBlock(req, args, pResult, segments, tiers, l3ev); blocked != nil {
 		blocked.Stderr = msg + "\n"
@@ -830,7 +830,7 @@ func (e *Engine) ExecuteStreaming(ctx context.Context, req Request, stdout, stde
 
 	args := req.args()
 
-	pResult, segments, tiers, l3ev := e.evaluatePolicy(ctx, args, req)
+	pResult, segments, tiers, l3ev := e.evaluatePolicy(ctx, args, req, true)
 
 	if blocked, msg := e.policyBlock(req, args, pResult, segments, tiers, l3ev); blocked != nil {
 		fmt.Fprintln(stderr, msg)
@@ -1520,13 +1520,26 @@ func upperFirst(s string) string {
 	return strings.ToUpper(s[:1]) + s[1:]
 }
 
-// ValidateApproval checks an approval token. Returns nil on success.
+// ValidateApproval reports whether an approval token authorises args. It
+// does not consume the token: the caller's next Execute must still be
+// able to spend it (ENT-003, 🎯T47).
 func (e *Engine) ValidateApproval(token string, args []string) error {
 	if e.tokenStore == nil {
 		return fmt.Errorf("approval tokens not enabled (L3 disabled)")
 	}
-	_, err := e.tokenStore.Validate(token, args)
+	_, err := e.tokenStore.Check(token, args)
 	return err
+}
+
+// ApproveToken records a human's approval of an escalation token. The
+// engine never calls this itself; a library consumer calls it after its
+// own out-of-band confirmation, and the MCP server calls it only after a
+// client elicitation the agent cannot answer for itself.
+func (e *Engine) ApproveToken(token string) error {
+	if e.tokenStore == nil {
+		return fmt.Errorf("approval tokens not enabled (L3 disabled)")
+	}
+	return e.tokenStore.Approve(token)
 }
 
 // --- internal ---
@@ -1541,14 +1554,22 @@ func (req *Request) args() []string {
 	return nil
 }
 
-func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request) (result *policy.Result, segments, tiers []string, l3ev *policy.CascadeEvidence) {
+// evaluatePolicy runs the policy chain. consumeToken distinguishes the
+// real execution path, which spends a single-use approval token, from
+// dry-run evaluation, which must leave it intact (ENT-003, 🎯T46).
+func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request, consumeToken bool) (result *policy.Result, segments, tiers []string, l3ev *policy.CascadeEvidence) {
 	if len(args) == 0 {
 		return nil, nil, nil, nil
 	}
 
 	// Token validation first.
 	if req.Approved != "" && e.tokenStore != nil {
-		_, err := e.tokenStore.Validate(req.Approved, args)
+		var err error
+		if consumeToken {
+			_, err = e.tokenStore.Consume(req.Approved, args)
+		} else {
+			_, err = e.tokenStore.Check(req.Approved, args)
+		}
 		if err != nil {
 			return &policy.Result{
 				Decision: policy.Deny,

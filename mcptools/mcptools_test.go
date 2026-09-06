@@ -134,7 +134,7 @@ func TestPolicyStatus(t *testing.T) {
 
 func TestApprove_NoTokenStore(t *testing.T) {
 	eng := newTestEngine(t) // L3 disabled = no token store
-	handler := handleApprove(eng)
+	handler := handleApprove(nil, eng)
 
 	result, err := handler(context.Background(), newCallReq("doit_approve", map[string]any{
 		"token":   "fake-token",

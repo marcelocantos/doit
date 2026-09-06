@@ -61,7 +61,7 @@ automatically.
 |---|---|
 | `doit_execute` | Execute a command through the policy engine |
 | `doit_dry_run` | Evaluate a command without executing (policy check only) |
-| `doit_approve` | Validate an approval token for an escalated command |
+| `doit_approve` | Ask the user to approve an escalated command; the agent cannot approve its own |
 
 **Work sessions** — declare a scope so L3 evaluations reuse it for faster decisions
 

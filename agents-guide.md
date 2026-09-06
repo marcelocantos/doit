@@ -45,7 +45,7 @@ interface for command execution.
 |---|---|
 | `doit_execute` | Execute a command through the policy engine |
 | `doit_dry_run` | Evaluate a command without executing (policy check only) |
-| `doit_approve` | Validate an approval token for a previously escalated command |
+| `doit_approve` | Ask the user to approve a previously escalated command. doit mints the token on escalation, but only a human elicitation authorises it, and the approved token is then passed to `doit_execute` as `approved`. |
 
 ### Work sessions
 

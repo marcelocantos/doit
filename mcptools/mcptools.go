@@ -10,6 +10,7 @@ package mcptools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -72,12 +73,14 @@ func Register(srv *server.MCPServer, eng *engine.Engine) {
 
 	srv.AddTool(
 		mcp.NewTool("doit_approve",
-			mcp.WithDescription("Validate an approval token for a previously escalated command. "+
-				"Tokens are single-use and time-limited."),
+			mcp.WithDescription("Ask the user to approve a previously escalated command. "+
+				"The user is prompted through the MCP client; the agent cannot approve "+
+				"its own escalation. Tokens are single-use and time-limited, and the "+
+				"approved token must then be passed to doit_execute."),
 			mcp.WithString("token", mcp.Required(), mcp.Description("The approval token")),
 			mcp.WithString("command", mcp.Required(), mcp.Description("The original command (must match exactly)")),
 		),
-		handleApprove(eng),
+		handleApprove(srv, eng),
 	)
 
 	// Admin tools.
@@ -409,6 +412,49 @@ func elicitScriptApproval(ctx context.Context, srv *server.MCPServer, info *engi
 	return decision == "approve", nil
 }
 
+// elicitTokenApproval asks the user, through the MCP client, to approve a
+// previously escalated command. doit itself never answers this question:
+// the token doit minted on escalation is a receipt, and only the human
+// on the other end of the client turns it into an authorisation.
+func elicitTokenApproval(ctx context.Context, srv *server.MCPServer, token, command string) (bool, error) {
+	message := fmt.Sprintf(
+		"An escalated command is waiting for your approval.\n\n"+
+			"Command: %s\nToken: %s\n\n"+
+			"Approving authorises exactly one execution of this command.",
+		command, token,
+	)
+
+	result, err := srv.RequestElicitation(ctx, mcp.ElicitationRequest{
+		Params: mcp.ElicitationParams{
+			Message: message,
+			RequestedSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"decision": map[string]any{
+						"type":        "string",
+						"description": "Approve or deny this escalated command",
+						"enum":        []string{"approve", "deny"},
+						"default":     "deny",
+					},
+				},
+				"required": []string{"decision"},
+			},
+		},
+	})
+	if err != nil {
+		return false, err
+	}
+	if result.Action != mcp.ElicitationResponseActionAccept {
+		return false, nil
+	}
+	data, ok := result.Content.(map[string]any)
+	if !ok {
+		return false, nil
+	}
+	decision, _ := data["decision"].(string)
+	return decision == "approve", nil
+}
+
 // buildElicitationPrompt constructs the prompt text shown to the user for a
 // policy escalation/denial, used both for the MCP elicitation message and for
 // the audit log's elicitation_prompt field.
@@ -623,8 +669,8 @@ func handlePolicyStatus(eng *engine.Engine) server.ToolHandlerFunc {
 	}
 }
 
-func handleApprove(eng *engine.Engine) server.ToolHandlerFunc {
-	return func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleApprove(srv *server.MCPServer, eng *engine.Engine) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 		token, _ := args["token"].(string)
 		command, _ := args["command"].(string)
@@ -635,12 +681,27 @@ func handleApprove(eng *engine.Engine) server.ToolHandlerFunc {
 			return mcp.NewToolResultError("missing required parameter: command"), nil
 		}
 
+		// The token must exist and match the command before a human is
+		// asked about it, but the check must not spend it: the approved
+		// token still has to survive to the doit_execute that follows
+		// (ENT-003, 🎯T47).
 		cmdArgs := strings.Fields(command)
-		if err := eng.ValidateApproval(token, cmdArgs); err != nil {
+		if err := eng.ValidateApproval(token, cmdArgs); err != nil && !errors.Is(err, policy.ErrAwaitingApproval) {
 			return mcp.NewToolResultError(fmt.Sprintf("approval failed: %v", err)), nil
 		}
 
-		return mcp.NewToolResultText("Approval token validated. Command is now authorized."), nil
+		approved, err := elicitTokenApproval(ctx, srv, token, command)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("approval elicitation failed: %v", err)), nil
+		}
+		if !approved {
+			return mcp.NewToolResultError("approval failed: the user declined this command"), nil
+		}
+		if err := eng.ApproveToken(token); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("approval failed: %v", err)), nil
+		}
+
+		return mcp.NewToolResultText("Approved by the user. Pass this token as doit_execute's 'approved' argument; it is good for one execution."), nil
 	}
 }
 
