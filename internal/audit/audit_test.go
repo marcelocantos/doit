@@ -4,6 +4,7 @@
 package audit
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -167,47 +168,121 @@ func TestLoggerSizeLimit(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.jsonl")
 
-	// Use a very small max size to trigger the limit quickly.
-	// We set sizeCheckInterval to 1 implicitly by using a tiny limit and
-	// writing enough entries that the check fires on the first interval.
-	// Since sizeCheckInterval=100, we write 101 entries to trigger the check,
-	// but that is expensive. Instead we write 1 entry, then manually stat the
-	// file after writes to confirm the limit was enforced. We use a max of 1
-	// byte so even the first real check sees it exceeded.
-	logger, err := NewLogger(path, 1) // 1 byte max
+	// 1-byte limit: the size check fires on the sizeCheckInterval-th write,
+	// sees the file over the limit, and every Log from then on must refuse
+	// loudly with ErrAuditFull rather than returning (0, nil) (🎯T43).
+	logger, err := NewLogger(path, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// Write 100 entries to hit the first size check at writesSince==100.
-	for i := 0; i < sizeCheckInterval; i++ {
-		_, _ = logger.Log("test", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
+	for i := 0; i < sizeCheckInterval-1; i++ {
+		if _, err := logger.Log("test", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil); err != nil {
+			t.Fatalf("write %d: %v", i, err)
+		}
 	}
-
-	// Get file size after 100 writes (before the size check fires).
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sizeAfter100 := info.Size()
+	sizeAtLimit := info.Size()
 
-	// Write one more entry — this triggers the size check (writesSince resets),
-	// which should set sizeLimitHit=true for future writes.
-	_, _ = logger.Log("trigger", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
-
-	// Further writes should be skipped.
-	_, _ = logger.Log("skipped", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
-	_, _ = logger.Log("skipped2", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
-
+	if _, err := logger.Log("over-limit", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil); !errors.Is(err, ErrAuditFull) {
+		t.Fatalf("expected ErrAuditFull once the limit is hit, got %v", err)
+	}
+	if _, err := logger.Log("over-limit-2", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil); !errors.Is(err, ErrAuditFull) {
+		t.Fatalf("expected ErrAuditFull to persist, got %v", err)
+	}
 	infoAfter, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if infoAfter.Size() != sizeAtLimit {
+		t.Errorf("file grew after size limit: %d -> %d", sizeAtLimit, infoAfter.Size())
+	}
 
-	// File should not have grown significantly after the limit was hit.
-	// (One trigger entry may have been written before sizeLimitHit was set.)
-	if infoAfter.Size() > sizeAfter100+4096 {
-		t.Errorf("file grew unexpectedly after size limit: %d -> %d", sizeAfter100, infoAfter.Size())
+	// Rotation (operator truncates or moves the file aside) must let
+	// logging resume instead of latching the refusal forever.
+	if err := os.Truncate(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	logger.maxSizeBytes = 1 << 20
+	if _, err := logger.Log("after-rotation", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil); err != nil {
+		t.Fatalf("expected logging to resume after rotation, got %v", err)
+	}
+}
+
+// TestLogFailedWriteDoesNotAdvanceChain is the 🎯T43 regression: a write
+// that fails must leave seq/prev_hash untouched so the next successful
+// write continues the on-disk chain without a gap.
+func TestLogFailedWriteDoesNotAdvanceChain(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+	logger, err := NewLogger(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := logger.Log("first", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Make the file unwritable so the next append fails.
+	if err := os.Chmod(path, 0400); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := logger.Log("lost", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil); err == nil {
+		t.Skip("append to a 0400 file succeeded (running as root?); cannot exercise the failed-write path")
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	seq, err := logger.Log("second", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seq != 2 {
+		t.Errorf("seq after failed write: got %d, want 2 (no gap)", seq)
+	}
+	if err := Verify(path); err != nil {
+		t.Fatalf("chain should verify after a failed then successful write: %v", err)
+	}
+}
+
+// TestNewLoggerCorruptTailResumesFromLastParseable: a torn final line
+// (crash mid-write) must not silently reset the chain to genesis.
+func TestNewLoggerCorruptTailResumesFromLastParseable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+	logger1, err := NewLogger(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cmd := range []string{"first", "second"} {
+		if _, err := logger1.Log(cmd, []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString(`{"seq":3,"time":"2026-01-01T00:00:00Z","prev_ha`) // torn line, no newline
+	f.Close()
+
+	logger2, err := NewLogger(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := logger2.Log("third", []string{"cat"}, []string{"read"}, 0, "", time.Millisecond, "/tmp", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seq != 3 {
+		t.Errorf("seq after corrupt tail: got %d, want 3", seq)
+	}
+	entries, _ := Tail(path, 10) // Tail reports the skipped torn line as an error
+	if len(entries) != 3 || entries[2].PrevHash != entries[1].Hash {
+		t.Errorf("chain did not resume from the last parseable entry: %+v", entries)
 	}
 }
 

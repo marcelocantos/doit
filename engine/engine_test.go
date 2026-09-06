@@ -798,3 +798,49 @@ func (m *mockSessionPrompter) PromptWithinSession(_ context.Context, prompt stri
 	}
 	return `{"decision":"allow","reasoning":"mock session allow"}`, nil
 }
+
+// TestNew_AuditLoggerFailureIsFatal: doit must not start without its
+// security-of-record (🎯T43).
+func TestNew_AuditLoggerFailureIsFatal(t *testing.T) {
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "not-a-dir")
+	os.WriteFile(blocker, []byte("x"), 0600)
+	cfgPath := filepath.Join(dir, "config.yaml")
+	os.WriteFile(cfgPath, []byte(
+		"audit:\n  path: "+filepath.Join(blocker, "audit.jsonl")+"\n"+
+			"policy:\n  level3_enabled: false\n",
+	), 0600)
+
+	if _, err := New(Options{ConfigPath: cfgPath}); err == nil {
+		t.Fatal("expected New to fail when the audit log cannot be created")
+	}
+}
+
+// TestExecute_SurfacesAuditWriteError: when the audit append fails
+// after a command ran, the failure is reported on stderr instead of
+// being discarded.
+func TestExecute_SurfacesAuditWriteError(t *testing.T) {
+	eng := newTestEngine(t)
+	auditPath := eng.AuditPath()
+
+	// Seed one entry so the file exists, then make it unwritable.
+	seed := eng.Execute(context.Background(), Request{Command: "true", Retry: true})
+	if seed.ExitCode != 0 {
+		t.Fatalf("seed: exit %d stderr=%q", seed.ExitCode, seed.Stderr)
+	}
+	if err := os.Chmod(auditPath, 0400); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(auditPath, 0600) })
+
+	result := eng.Execute(context.Background(), Request{Command: "true", Retry: true})
+	if !strings.Contains(result.Stderr, "doit: audit:") {
+		t.Skipf("audit append to a 0400 file succeeded (running as root?); stderr=%q", result.Stderr)
+	}
+
+	// A blocked request must also carry the audit failure.
+	blocked := eng.Execute(context.Background(), Request{Command: "touch nothing"})
+	if !strings.Contains(blocked.Stderr, "doit: audit:") {
+		t.Errorf("blocked result should surface the audit failure, got %q", blocked.Stderr)
+	}
+}

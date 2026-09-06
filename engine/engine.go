@@ -193,10 +193,12 @@ func New(opts Options, engineOpts ...EngineOption) (*Engine, error) {
 	cfg.ApplyTiers(reg)
 	cfg.ApplyRules(reg)
 
+	// The audit log is the security-of-record. Without it doit would run
+	// commands with no trace, so a logger that cannot be opened is fatal
+	// rather than a warning (🎯T43).
 	logger, err := audit.NewLogger(cfg.Audit.Path, int64(cfg.Audit.MaxSizeMB)*1024*1024)
 	if err != nil {
-		log.Printf("doit: engine: audit logger: %v (continuing without audit)", err)
-		logger = nil
+		return nil, fmt.Errorf("audit logger: %w", err)
 	}
 
 	e := &Engine{
@@ -561,13 +563,16 @@ func (e *Engine) handleScriptGate(ctx context.Context, req Request, stdout, stde
 	}
 	if sg.Err != nil {
 		reason := scriptGateDenyReason(sg)
-		e.logScriptEvent(req, "deny", "script-hash-error", "", "", reason, 1)
+		msg := fmt.Sprintf("doit: %s", reason)
+		if err := e.logScriptEvent(req, "deny", "script-hash-error", "", "", reason, 1); err != nil {
+			msg += fmt.Sprintf("\ndoit: audit: %v", err)
+		}
 		if stderr != nil {
-			fmt.Fprintf(stderr, "doit: %s\n", reason)
+			fmt.Fprintln(stderr, msg)
 		}
 		return &Result{
 			ExitCode:       1,
-			Stderr:         fmt.Sprintf("doit: %s", reason),
+			Stderr:         msg,
 			PolicyLevel:    0,
 			PolicyDecision: "deny",
 			PolicyReason:   reason,
@@ -576,13 +581,16 @@ func (e *Engine) handleScriptGate(ctx context.Context, req Request, stdout, stde
 	}
 	if !sg.Approved {
 		reason := "unapproved script content — approve via doit_execute elicitation"
-		e.logScriptEvent(req, "escalate", "script-hash-pending", sg.Hash, sg.Invocation.ResolvedPath, reason, 1)
+		msg := fmt.Sprintf("doit: policy: %s", reason)
+		if err := e.logScriptEvent(req, "escalate", "script-hash-pending", sg.Hash, sg.Invocation.ResolvedPath, reason, 1); err != nil {
+			msg += fmt.Sprintf("\ndoit: audit: %v", err)
+		}
 		if stderr != nil {
-			fmt.Fprintf(stderr, "doit: policy: %s\n", reason)
+			fmt.Fprintln(stderr, msg)
 		}
 		return &Result{
 			ExitCode:       1,
-			Stderr:         fmt.Sprintf("doit: policy: %s", reason),
+			Stderr:         msg,
 			PolicyLevel:    0,
 			PolicyDecision: "escalate",
 			PolicyReason:   reason,
@@ -732,16 +740,19 @@ func (e *Engine) runScriptCommand(ctx context.Context, req Request, sg scriptGat
 		if req.ExpectedDurationSeconds > 0 {
 			opts.ExpectedDuration = float64(req.ExpectedDurationSeconds) * 1000.0
 		}
-		_, _ = e.logger.Log(cmdStr, []string{sg.Invocation.Interpreter}, []string{"script"}, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
+		if _, err := e.logger.Log(cmdStr, []string{sg.Invocation.Interpreter}, []string{"script"}, exitCode, errMsg, duration, req.Cwd, req.Retry, opts); err != nil {
+			fmt.Fprintf(errW, "doit: audit: %v\n", err)
+		}
 	}
 	return exitCode
 }
 
 // logScriptEvent writes an audit entry for a script-gate denial or
-// escalation. No command is executed; duration is 0.
-func (e *Engine) logScriptEvent(req Request, decision, ruleID, hash, scriptPath, reason string, exitCode int) {
+// escalation. No command is executed; duration is 0. Returns the audit
+// write error, which callers surface to the user.
+func (e *Engine) logScriptEvent(req Request, decision, ruleID, hash, scriptPath, reason string, exitCode int) error {
 	if e.logger == nil {
-		return
+		return nil
 	}
 	opts := &audit.LogOptions{
 		PolicyLevel:   0,
@@ -752,7 +763,8 @@ func (e *Engine) logScriptEvent(req Request, decision, ruleID, hash, scriptPath,
 		ScriptHash:    hash,
 		ScriptPath:    scriptPath,
 	}
-	_, _ = e.logger.Log(req.Command, nil, nil, exitCode, reason, 0, req.Cwd, req.Retry, opts)
+	_, err := e.logger.Log(req.Command, nil, nil, exitCode, reason, 0, req.Cwd, req.Retry, opts)
+	return err
 }
 
 // Execute evaluates policy and, if allowed, runs the command via sh -c.
@@ -876,7 +888,10 @@ func (e *Engine) policyBlock(req Request, args []string, pResult *policy.Result,
 		return nil, ""
 	}
 
-	e.logPolicyResult(req, args, pResult, segments, tiers, exitPolicyBlocked, l3ev)
+	auditSuffix := ""
+	if err := e.logPolicyResult(req, args, pResult, segments, tiers, exitPolicyBlocked, l3ev); err != nil {
+		auditSuffix = fmt.Sprintf("\ndoit: audit: %v", err)
+	}
 	if pResult.Level == 3 {
 		go e.tryPromote()
 	}
@@ -890,7 +905,7 @@ func (e *Engine) policyBlock(req Request, args []string, pResult *policy.Result,
 	}
 
 	if pResult.Decision == policy.Deny {
-		return res, fmt.Sprintf("doit: policy: %s", pResult.Reason)
+		return res, fmt.Sprintf("doit: policy: %s", pResult.Reason) + auditSuffix
 	}
 
 	// Escalate (or any decision that is not Allow/Deny). An L3 escalation
@@ -903,10 +918,10 @@ func (e *Engine) policyBlock(req Request, args []string, pResult *policy.Result,
 		}
 		res.EscalateToken = token
 		return res, fmt.Sprintf("doit: policy escalation (Level 3): %s\napproval-token: %s",
-			pResult.Reason, token)
+			pResult.Reason, token) + auditSuffix
 	}
 	return res, fmt.Sprintf("doit: policy escalation (Level %d): %s — not executed; requires explicit approval",
-		pResult.Level, pResult.Reason)
+		pResult.Level, pResult.Reason) + auditSuffix
 }
 
 // PolicyStatus returns a summary of the policy engine state.
@@ -1061,7 +1076,9 @@ func (e *Engine) ApproveScript(hash, pathHint, justification string) (*script.Ap
 			ScriptHash:    hash,
 			ScriptPath:    pathHint,
 		}
-		_, _ = e.logger.Log("<script-approval>", []string{"script"}, []string{"script"}, 0, "", 0, "", false, opts)
+		if _, err := e.logger.Log("<script-approval>", []string{"script"}, []string{"script"}, 0, "", 0, "", false, opts); err != nil {
+			return entry, fmt.Errorf("script approval recorded but audit write failed: %w", err)
+		}
 	}
 	return entry, nil
 }
@@ -1079,7 +1096,9 @@ func (e *Engine) RevokeScriptApproval(hash string) error {
 			PolicyRuleID: "script-hash-revoked",
 			ScriptHash:   hash,
 		}
-		_, _ = e.logger.Log("<script-revocation>", []string{"script"}, []string{"script"}, 0, "", 0, "", false, opts)
+		if _, err := e.logger.Log("<script-revocation>", []string{"script"}, []string{"script"}, 0, "", 0, "", false, opts); err != nil {
+			return fmt.Errorf("script approval revoked but audit write failed: %w", err)
+		}
 	}
 	return nil
 }
@@ -1751,7 +1770,10 @@ func (e *Engine) runShellCommand(ctx context.Context, args []string, req Request
 		}
 	}
 
-	seq := e.logExecutionWithExcerpts(ctx, cmdStr, nil, nil, exitCode, errMsg, duration, req, timedOut, stdoutExcerpt, stderrExcerpt)
+	seq, auditErr := e.logExecutionWithExcerpts(ctx, cmdStr, nil, nil, exitCode, errMsg, duration, req, timedOut, stdoutExcerpt, stderrExcerpt)
+	if auditErr != nil {
+		fmt.Fprintf(errW, "doit: audit: %v\n", auditErr)
+	}
 	return exitCode, seq
 }
 
@@ -1769,13 +1791,13 @@ func withTimeoutIfSet(ctx context.Context, seconds int) (context.Context, contex
 	return context.WithTimeout(ctx, time.Duration(seconds)*time.Second)
 }
 
-func (e *Engine) logExecution(ctx context.Context, cmdStr string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, req Request, timedOut bool) uint64 {
-	return e.logExecutionWithExcerpts(ctx, cmdStr, segments, tiers, exitCode, errMsg, duration, req, timedOut, "", "")
-}
-
-func (e *Engine) logExecutionWithExcerpts(ctx context.Context, cmdStr string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, req Request, timedOut bool, stdoutExcerpt, stderrExcerpt string) uint64 {
+// logExecutionWithExcerpts writes the audit entry for an executed
+// command. The returned error is the audit write failure, which the
+// caller surfaces on stderr: the command has already run, so the only
+// honest option is to make the missing record visible.
+func (e *Engine) logExecutionWithExcerpts(ctx context.Context, cmdStr string, segments, tiers []string, exitCode int, errMsg string, duration time.Duration, req Request, timedOut bool, stdoutExcerpt, stderrExcerpt string) (uint64, error) {
 	if e.logger == nil {
-		return 0
+		return 0, nil
 	}
 	opts := &audit.LogOptions{}
 	if info := policy.EvalFromContext(ctx); info != nil {
@@ -1796,13 +1818,15 @@ func (e *Engine) logExecutionWithExcerpts(ctx context.Context, cmdStr string, se
 	opts.ProjectRoot = e.projectRoot
 	opts.StdoutExcerpt = stdoutExcerpt
 	opts.StderrExcerpt = stderrExcerpt
-	seq, _ := e.logger.Log(cmdStr, segments, tiers, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
-	return seq
+	return e.logger.Log(cmdStr, segments, tiers, exitCode, errMsg, duration, req.Cwd, req.Retry, opts)
 }
 
-func (e *Engine) logPolicyResult(req Request, args []string, result *policy.Result, segments, tiers []string, exitCode int, l3ev *policy.CascadeEvidence) {
+// logPolicyResult writes the audit entry for a blocked (denied or
+// escalated) request and returns the audit write error for the caller
+// to surface.
+func (e *Engine) logPolicyResult(req Request, args []string, result *policy.Result, segments, tiers []string, exitCode int, l3ev *policy.CascadeEvidence) error {
 	if e.logger == nil {
-		return
+		return nil
 	}
 	opts := &audit.LogOptions{
 		PolicyLevel:   result.Level,
@@ -1815,12 +1839,13 @@ func (e *Engine) logPolicyResult(req Request, args []string, result *policy.Resu
 		opts.L3Fast = l3ev.Fast
 		opts.L3Deep = l3ev.Deep
 	}
-	_, _ = e.logger.Log(
+	_, err := e.logger.Log(
 		strings.Join(args, " "),
 		segments, tiers,
 		exitCode, result.Reason,
 		0, req.Cwd, req.Retry, opts,
 	)
+	return err
 }
 
 func (e *Engine) tryPromote() {
