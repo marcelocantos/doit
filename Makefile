@@ -13,7 +13,7 @@ bin/doit:
 	go build $(LDFLAGS) -o bin/doit ./cmd/doit
 
 test:
-	go test ./...
+	go test -race ./...
 
 vet:
 	go vet ./...
@@ -33,7 +33,7 @@ smoke: build
 bullseye:
 	@set -e; \
 	go vet ./... && echo "✓ vet"; \
-	go test ./... >/dev/null && echo "✓ tests"; \
+	go test -race ./... >/dev/null && echo "✓ tests"; \
 	go build ./... && echo "✓ build"; \
 	if [ -z "$$(git status --porcelain)" ]; then \
 		echo "✓ clean"; \
