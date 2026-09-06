@@ -4,9 +4,12 @@
 package policy
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestLoadStoreMissingFile(t *testing.T) {
@@ -379,5 +382,83 @@ func TestParseDecision(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("ParseDecision(%q) = %v, want %v", tt.input, got, tt.want)
 		}
+	}
+}
+
+// TestAppendEntriesConcurrent is the 🎯T44 regression: N goroutines each
+// append one unique entry; every entry must survive. Run under -race.
+func TestAppendEntriesConcurrent(t *testing.T) {
+	const writers = 32
+	path := filepath.Join(t.TempDir(), "learned-policy.yaml")
+
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			entry := PolicyEntry{
+				ID:       fmt.Sprintf("concurrent-%d", i),
+				Match:    MatchCriteria{Cap: "echo"},
+				Decision: "allow",
+				Approved: true,
+			}
+			if _, err := AppendEntries(path, []PolicyEntry{entry}); err != nil {
+				errs <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("AppendEntries: %v", err)
+	}
+
+	entries, err := LoadStore(path)
+	if err != nil {
+		t.Fatalf("LoadStore: %v", err)
+	}
+	if len(entries) != writers {
+		t.Fatalf("lost updates: %d of %d entries persisted", len(entries), writers)
+	}
+}
+
+// TestStoreFileLockExcludes checks the advisory file lock serialises two
+// holders on the same lock path (they would be separate processes in
+// production; separate descriptors are enough to exercise flock).
+func TestStoreFileLockExcludes(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "learned-policy.yaml.lock")
+
+	unlock1, err := lockStoreFile(lockPath)
+	if err != nil {
+		t.Fatalf("first lock: %v", err)
+	}
+
+	acquired := make(chan struct{})
+	go func() {
+		unlock2, err := lockStoreFile(lockPath)
+		if err != nil {
+			t.Errorf("second lock: %v", err)
+			close(acquired)
+			return
+		}
+		close(acquired)
+		unlock2()
+	}()
+
+	select {
+	case <-acquired:
+		if storeLockIsAdvisoryOnly {
+			return // no flock on this platform; nothing to exclude
+		}
+		t.Fatal("second holder acquired the lock while the first still held it")
+	case <-time.After(200 * time.Millisecond):
+		// Expected: blocked.
+	}
+	unlock1()
+	select {
+	case <-acquired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second holder never acquired the lock after release")
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -14,14 +15,14 @@ import (
 
 // PolicyEntry is a single learned policy rule.
 type PolicyEntry struct {
-	ID          string        `yaml:"id"`
-	Description string        `yaml:"description"`
-	Match       MatchCriteria `yaml:"match"`
-	Decision    string        `yaml:"decision"`    // "allow", "deny", "escalate"
-	Reasoning   string        `yaml:"reasoning"`   // why this decision was made
-	Confidence  string        `yaml:"confidence"`   // "high", "medium", "low"
-	Provenance  string        `yaml:"provenance"`   // "human", "gatekeeper"
-	Approved    bool          `yaml:"approved"`
+	ID          string         `yaml:"id"`
+	Description string         `yaml:"description"`
+	Match       MatchCriteria  `yaml:"match"`
+	Decision    string         `yaml:"decision"`   // "allow", "deny", "escalate"
+	Reasoning   string         `yaml:"reasoning"`  // why this decision was made
+	Confidence  string         `yaml:"confidence"` // "high", "medium", "low"
+	Provenance  string         `yaml:"provenance"` // "human", "gatekeeper"
+	Approved    bool           `yaml:"approved"`
 	Review      ReviewSchedule `yaml:"review"`
 }
 
@@ -128,28 +129,52 @@ func SaveStore(path string, entries []PolicyEntry) error {
 	return nil
 }
 
+// storeMu serialises read-modify-write cycles on the learned-policy
+// store within this process. The request goroutine (RecordDecision) and
+// the background promoter (tryPromote) both mutate the same YAML file;
+// without one lock spanning Load+Save the last writer wins and silently
+// drops the other's entries (🎯T44).
+var storeMu sync.Mutex
+
+// withStoreLock runs fn while holding storeMu and an advisory file lock
+// on path+".lock", so separate doit processes sharing one store do not
+// clobber each other either.
+func withStoreLock(path string, fn func() error) error {
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	unlock, err := lockStoreFile(path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return fn()
+}
+
 // AppendEntries adds newEntries to the store at path, skipping any whose ID
 // already exists. Returns the count of entries actually added.
 func AppendEntries(path string, newEntries []PolicyEntry) (int, error) {
-	existing, err := LoadStore(path)
-	if err != nil {
-		return 0, err
-	}
-
-	seen := make(map[string]bool, len(existing))
-	for _, e := range existing {
-		seen[e.ID] = true
-	}
-
 	var added int
-	for _, e := range newEntries {
-		if !seen[e.ID] {
-			existing = append(existing, e)
-			added++
+	err := withStoreLock(path, func() error {
+		existing, err := LoadStore(path)
+		if err != nil {
+			return err
 		}
-	}
 
-	if err := SaveStore(path, existing); err != nil {
+		seen := make(map[string]bool, len(existing))
+		for _, e := range existing {
+			seen[e.ID] = true
+		}
+
+		for _, e := range newEntries {
+			if !seen[e.ID] {
+				existing = append(existing, e)
+				added++
+			}
+		}
+
+		return SaveStore(path, existing)
+	})
+	if err != nil {
 		return 0, err
 	}
 	return added, nil
@@ -158,35 +183,39 @@ func AppendEntries(path string, newEntries []PolicyEntry) (int, error) {
 // UpdateEntry loads the store, applies fn to the entry with the given id, and
 // saves. Returns an error if the id is not found.
 func UpdateEntry(path string, id string, fn func(*PolicyEntry)) error {
-	entries, err := LoadStore(path)
-	if err != nil {
-		return err
-	}
-
-	for i := range entries {
-		if entries[i].ID == id {
-			fn(&entries[i])
-			return SaveStore(path, entries)
+	return withStoreLock(path, func() error {
+		entries, err := LoadStore(path)
+		if err != nil {
+			return err
 		}
-	}
-	return fmt.Errorf("policy entry %q: not found", id)
+
+		for i := range entries {
+			if entries[i].ID == id {
+				fn(&entries[i])
+				return SaveStore(path, entries)
+			}
+		}
+		return fmt.Errorf("policy entry %q: not found", id)
+	})
 }
 
 // DeleteEntry removes the entry with the given id from the store. Returns an
 // error if the id is not found.
 func DeleteEntry(path string, id string) error {
-	entries, err := LoadStore(path)
-	if err != nil {
-		return err
-	}
-
-	for i, e := range entries {
-		if e.ID == id {
-			remaining := append(entries[:i:i], entries[i+1:]...)
-			return SaveStore(path, remaining)
+	return withStoreLock(path, func() error {
+		entries, err := LoadStore(path)
+		if err != nil {
+			return err
 		}
-	}
-	return fmt.Errorf("policy entry %q: not found", id)
+
+		for i, e := range entries {
+			if e.ID == id {
+				remaining := append(entries[:i:i], entries[i+1:]...)
+				return SaveStore(path, remaining)
+			}
+		}
+		return fmt.Errorf("policy entry %q: not found", id)
+	})
 }
 
 // ParseDecision converts a decision string to a Decision enum.

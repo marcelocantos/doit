@@ -1580,11 +1580,13 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 		result = &policy.Result{Decision: policy.Escalate, Level: 1, Reason: "L1 disabled"}
 	}
 
-	// L2: learned patterns.
-	if result.Decision == policy.Escalate && e.policyL2 != nil {
-		e.l2Mu.RLock()
-		result = e.policyL2.Evaluate(policyReq)
-		e.l2Mu.RUnlock()
+	// L2: learned patterns. Read the pointer under the lock: reloadL2
+	// swaps it from the promoter goroutine (mirrors the L1 read above).
+	e.l2Mu.RLock()
+	l2 := e.policyL2
+	e.l2Mu.RUnlock()
+	if result.Decision == policy.Escalate && l2 != nil {
+		result = l2.Evaluate(policyReq)
 	}
 
 	// Duration anomaly sanity check (L2-scope) — fires when the request
