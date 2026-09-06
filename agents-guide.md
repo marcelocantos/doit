@@ -190,7 +190,9 @@ creating a permanent Starlark rule at varying generality levels.
    `make -j`, `git push --force`). The user will be prompted to
    override via elicitation.
 3. **Policy escalation** — The policy engine needs human review. The
-   user will be prompted with the policy reasoning and options.
+   user will be prompted with the policy reasoning and options. If the
+   client cannot show the prompt (no elicitation support), the command
+   is not executed — doit never runs a command nobody approved.
 
 ## Shell-script content-hash approval
 

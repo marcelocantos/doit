@@ -66,6 +66,8 @@ Snapshot as of v0.9.0.
 | `Engine.Execute(ctx, req)` | `Result` | Stable |
 | `Engine.Evaluate(ctx, req)` | `EvalResult` | Stable |
 | `Engine.ExecuteStreaming(ctx, req, stdout, stderr)` | `Result` | Stable |
+| Fail-closed execution: `Execute`/`ExecuteStreaming` run the command only on policy Allow; Deny, Escalate (any level), and empty command return exit 1/2 with no side effect | invariant | Stable |
+| `Request.Retry` converts a residual Escalate to Allow with `PolicyRuleID == "retry-approved"` (hardcoded denials still apply) | behaviour | Stable |
 | `Engine.PolicyStatus()` | `map[string]any` | Stable |
 | `Request` struct | Command, Args, Justification, SafetyArg, Cwd, Env, Approved, Retry, TimeoutSeconds, ExpectedDurationSeconds | Stable |
 | `policy.Request` struct | Command, Cwd, Retry, Justification, SafetyArg, ProjectType, TimeoutSeconds, ExpectedDurationSeconds | Stable |

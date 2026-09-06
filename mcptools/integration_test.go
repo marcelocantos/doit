@@ -111,41 +111,36 @@ func TestIntegration_DryRun_Deny(t *testing.T) {
 	}
 }
 
-func TestIntegration_Execute_ReadOnly(t *testing.T) {
+// TestIntegration_Execute_NoElicitation_FailsClosed is the 🎯T40 MCP
+// regression: this client cannot answer elicitations, L3 is off, so a
+// novel command has nobody to approve it and must not run.
+func TestIntegration_Execute_NoElicitation_FailsClosed(t *testing.T) {
 	c := newMCPClient(t)
 	ctx := context.Background()
 
-	// Create a temp file to cat.
 	dir := t.TempDir()
-	testFile := filepath.Join(dir, "hello.txt")
-	os.WriteFile(testFile, []byte("hello doit\n"), 0644)
+	marker := filepath.Join(dir, "MARKER")
 
 	result, err := c.CallTool(ctx, mcp.CallToolRequest{
 		Params: mcp.CallToolParams{
 			Name: "doit_execute",
 			Arguments: map[string]any{
-				"command": "cat " + testFile,
+				"command": "touch " + marker,
 			},
 		},
 	})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
 	}
-	if result.IsError {
-		t.Errorf("expected success, got error")
+	if !result.IsError {
+		t.Errorf("expected error result for unapprovable command, got success:\n%s", extractText(t, result))
 	}
-
 	text := extractText(t, result)
-	var resp map[string]any
-	if err := json.Unmarshal([]byte(text), &resp); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	if !strings.Contains(text, "not executed") {
+		t.Errorf("expected 'not executed' in result, got:\n%s", text)
 	}
-	if code, _ := resp["exit_code"].(float64); code != 0 {
-		t.Errorf("expected exit_code 0, got %v", resp["exit_code"])
-	}
-	stdout, _ := resp["stdout"].(string)
-	if !strings.Contains(stdout, "hello doit") {
-		t.Errorf("expected 'hello doit' in stdout, got: %q", stdout)
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("command ran without approval: marker file exists")
 	}
 }
 

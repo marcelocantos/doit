@@ -50,7 +50,13 @@ type Request struct {
 	Cwd           string            // working directory
 	Env           map[string]string // environment variables
 	Approved      string            // approval token for escalated commands
-	Retry         bool              // bypass config rules for this invocation
+	// Retry marks this invocation as explicitly approved by the caller
+	// after a prior escalation or bypassable denial. It skips bypassable
+	// config rules, L2, and L3, and converts a residual Escalate into
+	// Allow (RuleIDRetryApproved). Hardcoded denials still apply. The MCP
+	// server sets it only after a human elicitation accepts; it is never
+	// exposed as a doit_execute argument.
+	Retry bool
 	// TimeoutSeconds bounds command runtime. When > 0, doit kills the
 	// process on expiry (SIGKILL via context cancellation). Zero means
 	// no timeout (default).
@@ -61,6 +67,10 @@ type Request struct {
 	// flag mismatches.
 	ExpectedDurationSeconds int
 }
+
+// RuleIDRetryApproved is the audit rule_id recorded when a command that
+// would otherwise have escalated runs because the caller set Retry.
+const RuleIDRetryApproved = "retry-approved"
 
 // Result is returned by Execute.
 type Result struct {
@@ -130,7 +140,7 @@ type Engine struct {
 	promoteCh  chan struct{}
 	projectCtx *doitctx.ProjectContext // discovered project context (may be nil)
 
-	projectRoot   string // normalised project root path (empty = no project context)
+	projectRoot string // normalised project root path (empty = no project context)
 
 	scriptStore   *script.Store
 	durationStore *policy.DurationStore
@@ -210,7 +220,6 @@ func New(opts Options, engineOpts ...EngineOption) (*Engine, error) {
 			e.projectRoot = opts.ProjectRoot
 		}
 	}
-
 
 	if e.storePath == "" {
 		e.storePath = policy.DefaultStorePath()
@@ -749,6 +758,10 @@ func (e *Engine) logScriptEvent(req Request, decision, ruleID, hash, scriptPath,
 // Execute evaluates policy and, if allowed, runs the command via sh -c.
 // Shell composition (pipes, redirects, &&, ||) is handled by the shell;
 // doit passes the command string through unchanged.
+//
+// Execute fails closed: the command runs only when the policy chain
+// returns Allow. Deny, Escalate (at any level), and "no policy result"
+// are all terminal refusals (🎯T40).
 func (e *Engine) Execute(ctx context.Context, req Request) *Result {
 	if res, handled := e.handleScriptGate(ctx, req, nil, nil); handled {
 		return res
@@ -759,82 +772,43 @@ func (e *Engine) Execute(ctx context.Context, req Request) *Result {
 	// Policy evaluation.
 	pResult, segments, tiers, l3ev := e.evaluatePolicy(ctx, args, req)
 
-	wasL3 := false
-	if pResult != nil {
-		if pResult.Decision == policy.Deny {
-			e.logPolicyResult(req, args, pResult, segments, tiers, 1, l3ev)
-			if pResult.Level == 3 {
-				go e.tryPromote()
-			}
-			return &Result{
-				ExitCode:       1,
-				Stderr:         fmt.Sprintf("doit: policy: %s", pResult.Reason),
-				PolicyLevel:    pResult.Level,
-				PolicyDecision: pResult.Decision.String(),
-				PolicyReason:   pResult.Reason,
-				PolicyRuleID:   pResult.RuleID,
-			}
-		}
-
-		if pResult.Decision == policy.Escalate && pResult.Level == 3 && e.tokenStore != nil {
-			e.logPolicyResult(req, args, pResult, segments, tiers, 1, l3ev)
-			token, tokenErr := e.tokenStore.Issue(strings.Join(args, " "), args)
-			if tokenErr != nil {
-				return &Result{
-					ExitCode: 2,
-					Stderr:   fmt.Sprintf("doit: token issue: %v", tokenErr),
-				}
-			}
-			stderrMsg := fmt.Sprintf("doit: policy escalation (Level 3): %s\napproval-token: %s\n",
-				pResult.Reason, token)
-			go e.tryPromote()
-			return &Result{
-				ExitCode:       1,
-				Stderr:         stderrMsg,
-				PolicyLevel:    pResult.Level,
-				PolicyDecision: pResult.Decision.String(),
-				PolicyReason:   pResult.Reason,
-				EscalateToken:  token,
-			}
-		}
-
-		wasL3 = pResult.Level == 3
-
-		ctx = policy.NewEvalContext(ctx, &policy.EvalInfo{
-			Level:         pResult.Level,
-			Decision:      pResult.Decision.String(),
-			RuleID:        pResult.RuleID,
-			Justification: req.Justification,
-			SafetyArg:     req.SafetyArg,
-			L3Evidence:    l3ev,
-		})
+	if blocked, msg := e.policyBlock(req, args, pResult, segments, tiers, l3ev); blocked != nil {
+		blocked.Stderr = msg + "\n"
+		return blocked
 	}
+
+	ctx = policy.NewEvalContext(ctx, &policy.EvalInfo{
+		Level:         pResult.Level,
+		Decision:      pResult.Decision.String(),
+		RuleID:        pResult.RuleID,
+		Justification: req.Justification,
+		SafetyArg:     req.SafetyArg,
+		L3Evidence:    l3ev,
+	})
 
 	// Execute the command.
 	var stdoutBuf, stderrBuf bytes.Buffer
 	exitCode, auditSeq := e.runCommand(ctx, args, req, &stdoutBuf, &stderrBuf)
 
-	if wasL3 {
+	if pResult.Level == 3 {
 		go e.tryPromote()
 	}
 
-	res := &Result{
-		ExitCode: exitCode,
-		Stdout:   stdoutBuf.String(),
-		Stderr:   stderrBuf.String(),
-		AuditSeq: auditSeq,
+	return &Result{
+		ExitCode:       exitCode,
+		Stdout:         stdoutBuf.String(),
+		Stderr:         stderrBuf.String(),
+		AuditSeq:       auditSeq,
+		PolicyLevel:    pResult.Level,
+		PolicyDecision: pResult.Decision.String(),
+		PolicyReason:   pResult.Reason,
+		PolicyRuleID:   pResult.RuleID,
 	}
-	if pResult != nil {
-		res.PolicyLevel = pResult.Level
-		res.PolicyDecision = pResult.Decision.String()
-		res.PolicyReason = pResult.Reason
-		res.PolicyRuleID = pResult.RuleID
-	}
-	return res
 }
 
 // ExecuteStreaming is like Execute but writes stdout/stderr to the provided
 // writers instead of buffering. Returns the result (Stdout/Stderr will be empty).
+// It shares Execute's fail-closed contract.
 func (e *Engine) ExecuteStreaming(ctx context.Context, req Request, stdout, stderr io.Writer) *Result {
 	if res, handled := e.handleScriptGate(ctx, req, stdout, stderr); handled {
 		res.Stdout = ""
@@ -846,69 +820,93 @@ func (e *Engine) ExecuteStreaming(ctx context.Context, req Request, stdout, stde
 
 	pResult, segments, tiers, l3ev := e.evaluatePolicy(ctx, args, req)
 
-	wasL3 := false
-	if pResult != nil {
-		if pResult.Decision == policy.Deny {
-			e.logPolicyResult(req, args, pResult, segments, tiers, 1, l3ev)
-			if pResult.Level == 3 {
-				go e.tryPromote()
-			}
-			msg := fmt.Sprintf("doit: policy: %s", pResult.Reason)
-			fmt.Fprintln(stderr, msg)
-			return &Result{
-				ExitCode:       1,
-				PolicyLevel:    pResult.Level,
-				PolicyDecision: pResult.Decision.String(),
-				PolicyReason:   pResult.Reason,
-				PolicyRuleID:   pResult.RuleID,
-			}
-		}
-
-		if pResult.Decision == policy.Escalate && pResult.Level == 3 && e.tokenStore != nil {
-			e.logPolicyResult(req, args, pResult, segments, tiers, 1, l3ev)
-			token, tokenErr := e.tokenStore.Issue(strings.Join(args, " "), args)
-			if tokenErr != nil {
-				fmt.Fprintf(stderr, "doit: token issue: %v\n", tokenErr)
-				return &Result{ExitCode: 2}
-			}
-			fmt.Fprintf(stderr, "doit: policy escalation (Level 3): %s\napproval-token: %s\n",
-				pResult.Reason, token)
-			go e.tryPromote()
-			return &Result{
-				ExitCode:       1,
-				PolicyLevel:    pResult.Level,
-				PolicyDecision: pResult.Decision.String(),
-				PolicyReason:   pResult.Reason,
-				EscalateToken:  token,
-			}
-		}
-
-		wasL3 = pResult.Level == 3
-
-		ctx = policy.NewEvalContext(ctx, &policy.EvalInfo{
-			Level:         pResult.Level,
-			Decision:      pResult.Decision.String(),
-			RuleID:        pResult.RuleID,
-			Justification: req.Justification,
-			SafetyArg:     req.SafetyArg,
-			L3Evidence:    l3ev,
-		})
+	if blocked, msg := e.policyBlock(req, args, pResult, segments, tiers, l3ev); blocked != nil {
+		fmt.Fprintln(stderr, msg)
+		return blocked
 	}
+
+	ctx = policy.NewEvalContext(ctx, &policy.EvalInfo{
+		Level:         pResult.Level,
+		Decision:      pResult.Decision.String(),
+		RuleID:        pResult.RuleID,
+		Justification: req.Justification,
+		SafetyArg:     req.SafetyArg,
+		L3Evidence:    l3ev,
+	})
 
 	exitCode, auditSeq := e.runCommand(ctx, args, req, stdout, stderr)
 
-	if wasL3 {
+	if pResult.Level == 3 {
 		go e.tryPromote()
 	}
 
-	res := &Result{ExitCode: exitCode, AuditSeq: auditSeq}
-	if pResult != nil {
-		res.PolicyLevel = pResult.Level
-		res.PolicyDecision = pResult.Decision.String()
-		res.PolicyReason = pResult.Reason
-		res.PolicyRuleID = pResult.RuleID
+	return &Result{
+		ExitCode:       exitCode,
+		AuditSeq:       auditSeq,
+		PolicyLevel:    pResult.Level,
+		PolicyDecision: pResult.Decision.String(),
+		PolicyReason:   pResult.Reason,
+		PolicyRuleID:   pResult.RuleID,
 	}
-	return res
+}
+
+// Exit codes returned when doit itself refuses or fails a request,
+// as opposed to exit codes propagated from the executed command.
+const (
+	exitPolicyBlocked = 1 // policy denied or escalated; command not run
+	exitEngineError   = 2 // doit could not process the request
+)
+
+// policyBlock is the single enforcement point shared by Execute and
+// ExecuteStreaming. It returns (nil, "") only when pResult is a policy
+// Allow; for every other outcome — Deny, Escalate at any level, or a
+// nil result — it logs the decision and returns the terminal Result and
+// the stderr message to surface. The caller must not run the command
+// when the returned Result is non-nil. This is the fail-closed
+// invariant of 🎯T40: "no opinion" is a refusal, never a pass.
+func (e *Engine) policyBlock(req Request, args []string, pResult *policy.Result, segments, tiers []string, l3ev *policy.CascadeEvidence) (*Result, string) {
+	if pResult == nil {
+		return &Result{
+			ExitCode:       exitEngineError,
+			PolicyDecision: policy.Escalate.String(),
+			PolicyReason:   "no policy result (empty command)",
+		}, "doit: refusing to run: no policy result (empty command)"
+	}
+	if pResult.Decision == policy.Allow {
+		return nil, ""
+	}
+
+	e.logPolicyResult(req, args, pResult, segments, tiers, exitPolicyBlocked, l3ev)
+	if pResult.Level == 3 {
+		go e.tryPromote()
+	}
+
+	res := &Result{
+		ExitCode:       exitPolicyBlocked,
+		PolicyLevel:    pResult.Level,
+		PolicyDecision: pResult.Decision.String(),
+		PolicyReason:   pResult.Reason,
+		PolicyRuleID:   pResult.RuleID,
+	}
+
+	if pResult.Decision == policy.Deny {
+		return res, fmt.Sprintf("doit: policy: %s", pResult.Reason)
+	}
+
+	// Escalate (or any decision that is not Allow/Deny). An L3 escalation
+	// with a token store mints an approval token for the caller; every
+	// other escalation is simply refused.
+	if pResult.Level == 3 && e.tokenStore != nil {
+		token, tokenErr := e.tokenStore.Issue(strings.Join(args, " "), args)
+		if tokenErr != nil {
+			return &Result{ExitCode: exitEngineError}, fmt.Sprintf("doit: token issue: %v", tokenErr)
+		}
+		res.EscalateToken = token
+		return res, fmt.Sprintf("doit: policy escalation (Level 3): %s\napproval-token: %s",
+			pResult.Reason, token)
+	}
+	return res, fmt.Sprintf("doit: policy escalation (Level %d): %s — not executed; requires explicit approval",
+		pResult.Level, pResult.Reason)
 }
 
 // PolicyStatus returns a summary of the policy engine state.
@@ -1624,6 +1622,21 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request)
 
 		elapsed := time.Since(t0)
 		log.Printf("doit: L3 LLM call completed in %v: %s (%s)", elapsed, result.Decision, result.Reason)
+	}
+
+	// A residual Escalate under Retry is the caller's explicit approval
+	// of an escalation it has already seen (the MCP allow_once /
+	// allow_always paths set Retry after human elicitation). Convert it
+	// to an explicit Allow so the audit trail and the fail-closed
+	// Execute path see a real decision rather than "no opinion". L3
+	// already does the same internally ("--retry bypasses Level 3").
+	if result.Decision == policy.Escalate && req.Retry {
+		result = &policy.Result{
+			Decision: policy.Allow,
+			Level:    result.Level,
+			Reason:   "escalation approved by caller (--retry)",
+			RuleID:   RuleIDRetryApproved,
+		}
 	}
 	return result, segments, tiers, l3ev
 }

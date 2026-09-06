@@ -51,6 +51,7 @@ func TestCapture_DefaultNoExcerptOnSuccess(t *testing.T) {
 	eng, auditPath := newTestEngineWithCapture(t, "")
 
 	result := eng.Execute(context.Background(), Request{
+		Retry:   true, // explicit approval; Execute fails closed on escalate
 		Command: "echo hello",
 	})
 	if result.ExitCode != 0 {
@@ -72,6 +73,7 @@ func TestCapture_FailedCommandProducesExcerpts(t *testing.T) {
 	eng, auditPath := newTestEngineWithCapture(t, "")
 
 	result := eng.Execute(context.Background(), Request{
+		Retry:   true, // explicit approval; Execute fails closed on escalate
 		Command: "echo 'fail output' >&2; exit 1",
 	})
 	if result.ExitCode == 0 {
@@ -92,6 +94,7 @@ func TestCapture_TruncationMarker(t *testing.T) {
 
 	// Generate output larger than 10 bytes (echo adds newline, so "123456789012" = 13 bytes).
 	result := eng.Execute(context.Background(), Request{
+		Retry:   true, // explicit approval; Execute fails closed on escalate
 		Command: "echo '123456789012'",
 	})
 	if result.ExitCode != 0 {
@@ -119,6 +122,7 @@ func TestCapture_AlwaysCapturesSuccess(t *testing.T) {
 		"  capture_output: always\n")
 
 	result := eng.Execute(context.Background(), Request{
+		Retry:   true, // explicit approval; Execute fails closed on escalate
 		Command: "echo hello_world",
 	})
 	if result.ExitCode != 0 {
@@ -139,6 +143,7 @@ func TestCapture_NeverCapturesNothing(t *testing.T) {
 
 	// Fail to confirm even failures produce no excerpts.
 	eng.Execute(context.Background(), Request{
+		Retry:   true, // explicit approval; Execute fails closed on escalate
 		Command: "echo fail_output; exit 2",
 	})
 
@@ -181,6 +186,7 @@ func TestCapture_RedactedCapability(t *testing.T) {
 	// will find it and return RedactOutput()=true. The shell will fail to find
 	// "mock-redact" but exit non-zero, triggering the failure path.
 	eng.Execute(context.Background(), Request{
+		Retry:   true, // explicit approval; Execute fails closed on escalate
 		Command: "mock-redact some-arg",
 	})
 
@@ -201,6 +207,7 @@ func TestCapture_RedactedCapability(t *testing.T) {
 		"  capture_output: always\n")
 	eng2.reg.Register(&mockRedactCap{})
 	eng2.Execute(context.Background(), Request{
+		Retry:   true, // explicit approval; Execute fails closed on escalate
 		Command: "mock-redact some-arg",
 	})
 	entry2 := lastAuditEntry(t, auditPath2)
@@ -217,8 +224,8 @@ type mockRedactCap struct{}
 
 var _ cap.Capability = (*mockRedactCap)(nil)
 
-func (m *mockRedactCap) Name() string              { return "mock-redact" }
-func (m *mockRedactCap) Description() string       { return "mock redact cap for testing" }
-func (m *mockRedactCap) Tier() cap.Tier            { return cap.TierRead }
-func (m *mockRedactCap) Validate([]string) error   { return nil }
-func (m *mockRedactCap) RedactOutput() bool        { return true }
+func (m *mockRedactCap) Name() string            { return "mock-redact" }
+func (m *mockRedactCap) Description() string     { return "mock redact cap for testing" }
+func (m *mockRedactCap) Tier() cap.Tier          { return cap.TierRead }
+func (m *mockRedactCap) Validate([]string) error { return nil }
+func (m *mockRedactCap) RedactOutput() bool      { return true }

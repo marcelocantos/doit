@@ -299,9 +299,11 @@ func handleExecute(srv *server.MCPServer, eng *engine.Engine) server.ToolHandler
 				decision, err := elicitPolicyDecision(ctx, srv, command, evalResult)
 				latencyMs := float64(time.Since(t0).Microseconds()) / 1000.0
 				if err != nil {
-					// Elicitation not supported or failed — fall through to
-					// normal execution which will return the denial.
-					return executeAndRespond(ctx, eng, r)
+					// Elicitation not supported or failed. There is no
+					// human decision, so the command must not run (🎯T40).
+					return mcp.NewToolResultError(fmt.Sprintf(
+						"Policy %s (L%d) requires user approval, but elicitation is unavailable (%v); not executed: %s",
+						evalResult.Decision, evalResult.Level, err, command)), nil
 				}
 
 				switch decision {
@@ -347,6 +349,8 @@ func handleExecute(srv *server.MCPServer, eng *engine.Engine) server.ToolHandler
 					_ = eng.RecordDecision(command, "deny")
 					elicitRulePromotion(ctx, srv, eng, command, "deny", 0)
 					return mcp.NewToolResultError(fmt.Sprintf("Denied by user (permanent): %s", command)), nil
+				default:
+					return mcp.NewToolResultError(fmt.Sprintf("Unrecognised elicitation decision %q; not executed: %s", decision, command)), nil
 				}
 			}
 

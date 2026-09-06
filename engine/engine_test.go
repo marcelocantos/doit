@@ -77,16 +77,125 @@ func TestEvaluate_DangerousCommand(t *testing.T) {
 	}
 }
 
+// The Execute_* shell tests below set Retry: true. In the L3-off test
+// engine every novel command escalates at L1, and Execute fails closed
+// on Escalate (🎯T40); Retry is the caller's explicit approval that
+// turns that escalation into an Allow so the shell path can be tested.
+
 func TestExecute_SimpleCommand(t *testing.T) {
 	eng := newTestEngine(t)
 
 	result := eng.Execute(context.Background(), Request{
 		Command: "cat",
 		Cwd:     t.TempDir(),
+		Retry:   true,
 	})
 	// cat with no stdin produces exit 0
 	if result.ExitCode != 0 {
 		t.Errorf("expected exit code 0, got %d; stderr: %s", result.ExitCode, result.Stderr)
+	}
+	if result.PolicyDecision != "allow" || result.PolicyRuleID != RuleIDRetryApproved {
+		t.Errorf("expected allow via %s, got %s/%s", RuleIDRetryApproved, result.PolicyDecision, result.PolicyRuleID)
+	}
+}
+
+// TestExecute_FailsClosedOnEscalate is the 🎯T40 regression: with L3
+// disabled a novel command escalates at L1 and must not run.
+func TestExecute_FailsClosedOnEscalate(t *testing.T) {
+	eng := newTestEngine(t)
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "MARKER")
+
+	result := eng.Execute(context.Background(), Request{
+		Command: "touch MARKER",
+		Cwd:     dir,
+	})
+	if result.ExitCode == 0 {
+		t.Fatalf("expected non-zero exit for escalated command, got 0; stdout=%q", result.Stdout)
+	}
+	if result.PolicyDecision != "escalate" {
+		t.Errorf("PolicyDecision: got %q, want escalate", result.PolicyDecision)
+	}
+	if !strings.Contains(result.Stderr, "not executed") {
+		t.Errorf("stderr should say the command was not executed, got %q", result.Stderr)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("escalated command ran: marker file exists")
+	}
+}
+
+// TestExecuteStreaming_FailsClosedOnEscalate mirrors the above for the
+// streaming path.
+func TestExecuteStreaming_FailsClosedOnEscalate(t *testing.T) {
+	eng := newTestEngine(t)
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "MARKER")
+
+	var stdout, stderr strings.Builder
+	result := eng.ExecuteStreaming(context.Background(), Request{
+		Command: "touch MARKER",
+		Cwd:     dir,
+	}, &stdout, &stderr)
+	if result.ExitCode == 0 {
+		t.Fatalf("expected non-zero exit for escalated command, got 0")
+	}
+	if result.PolicyDecision != "escalate" {
+		t.Errorf("PolicyDecision: got %q, want escalate", result.PolicyDecision)
+	}
+	if !strings.Contains(stderr.String(), "not executed") {
+		t.Errorf("stderr should say the command was not executed, got %q", stderr.String())
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("escalated command ran: marker file exists")
+	}
+}
+
+// TestExecute_FailsClosedOnL3EscalateWithoutTokenStore covers the
+// "L3 present, token store nil" construction: an L3 Escalate must still
+// be terminal.
+func TestExecute_FailsClosedOnL3EscalateWithoutTokenStore(t *testing.T) {
+	eng := newTestEngine(t)
+	mock := &mockSessionPrompter{response: `{"decision":"escalate","reasoning":"unsure"}`}
+	eng.policyL3 = policy.NewLevel3(mock)
+	eng.tokenStore = nil
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "MARKER")
+
+	result := eng.Execute(context.Background(), Request{
+		Command: "touch MARKER",
+		Cwd:     dir,
+	})
+	if result.ExitCode == 0 {
+		t.Fatal("expected non-zero exit for L3 escalate without token store")
+	}
+	if result.PolicyLevel != 3 || result.PolicyDecision != "escalate" {
+		t.Errorf("got L%d/%s, want L3/escalate", result.PolicyLevel, result.PolicyDecision)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("escalated command ran: marker file exists")
+	}
+}
+
+// TestExecute_EmptyCommandFailsClosed: no args means no policy result,
+// which is a refusal, not a pass.
+func TestExecute_EmptyCommandFailsClosed(t *testing.T) {
+	eng := newTestEngine(t)
+	result := eng.Execute(context.Background(), Request{Command: "   "})
+	if result.ExitCode == 0 {
+		t.Fatal("expected non-zero exit for empty command")
+	}
+}
+
+// TestExecute_RetryDoesNotBypassHardcodedDeny: Retry approves
+// escalations, never permanent denials.
+func TestExecute_RetryDoesNotBypassHardcodedDeny(t *testing.T) {
+	eng := newTestEngine(t)
+	result := eng.Execute(context.Background(), Request{
+		Command: "rm -rf /",
+		Retry:   true,
+	})
+	if result.PolicyDecision != "deny" || result.ExitCode == 0 {
+		t.Fatalf("expected deny, got %s exit=%d", result.PolicyDecision, result.ExitCode)
 	}
 }
 
@@ -98,6 +207,7 @@ func TestExecute_ShellExec(t *testing.T) {
 	result := eng.Execute(context.Background(), Request{
 		Command: "cat hello.txt",
 		Cwd:     dir,
+		Retry:   true,
 	})
 	if result.ExitCode != 0 {
 		t.Errorf("expected exit code 0, got %d; stderr: %s", result.ExitCode, result.Stderr)
@@ -116,6 +226,7 @@ func TestExecute_ShellExec_Pipeline(t *testing.T) {
 	result := eng.Execute(context.Background(), Request{
 		Command: "cat data.txt | grep beta",
 		Cwd:     dir,
+		Retry:   true,
 	})
 	if result.ExitCode != 0 {
 		t.Errorf("expected exit code 0, got %d; stderr: %s", result.ExitCode, result.Stderr)
@@ -130,6 +241,7 @@ func TestExecute_ShellExec_ExitCode(t *testing.T) {
 
 	result := eng.Execute(context.Background(), Request{
 		Command: "exit 42",
+		Retry:   true,
 	})
 	if result.ExitCode != 42 {
 		t.Errorf("expected exit code 42, got %d", result.ExitCode)
@@ -142,6 +254,7 @@ func TestExecute_ShellExec_Env(t *testing.T) {
 	result := eng.Execute(context.Background(), Request{
 		Command: "echo $DOIT_TEST_VAR",
 		Env:     map[string]string{"DOIT_TEST_VAR": "hello_doit"},
+		Retry:   true,
 	})
 	if result.ExitCode != 0 {
 		t.Errorf("expected exit code 0, got %d; stderr: %s", result.ExitCode, result.Stderr)
@@ -151,16 +264,17 @@ func TestExecute_ShellExec_Env(t *testing.T) {
 	}
 }
 
-func TestExecute_ArgsUsePipeline(t *testing.T) {
+func TestExecute_ArgsForm(t *testing.T) {
 	eng := newTestEngine(t)
 
-	// When Args is set, should use pipeline parser (legacy path), not sh -c.
+	// When Args is set, they are joined and run via sh -c like Command.
 	result := eng.Execute(context.Background(), Request{
-		Args: []string{"cat"},
-		Cwd:  t.TempDir(),
+		Args:  []string{"cat"},
+		Cwd:   t.TempDir(),
+		Retry: true,
 	})
 	if result.ExitCode != 0 {
-		t.Errorf("expected exit code 0 via pipeline path, got %d; stderr: %s", result.ExitCode, result.Stderr)
+		t.Errorf("expected exit code 0 via Args form, got %d; stderr: %s", result.ExitCode, result.Stderr)
 	}
 }
 
@@ -194,6 +308,7 @@ func TestExecuteStreaming(t *testing.T) {
 	result := eng.ExecuteStreaming(context.Background(), Request{
 		Command: "cat",
 		Cwd:     t.TempDir(),
+		Retry:   true,
 	}, &stdout, &stderr)
 	if result.ExitCode != 0 {
 		t.Errorf("expected exit code 0, got %d; stderr: %s", result.ExitCode, stderr.String())

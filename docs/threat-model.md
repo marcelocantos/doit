@@ -99,6 +99,13 @@ the full command string against safety heuristics, then presents the result
 to the user for confirmation. This catches at least some novel or unexpected
 commands — though L3 can be misled (see [Limits](#what-doit-does-not-defend-against)).
 
+Escalation is fail-closed. `Engine.Execute` and `ExecuteStreaming` run a
+command only when the policy chain returns Allow; an Escalate at any level
+(including L1/L2 when L3 is disabled, or an L3 that cannot decide) is a
+refusal. The only route from Escalate to execution is an explicit approval:
+a human elicitation answer on the MCP path (recorded with rule id
+`retry-approved`), or a library caller setting `Request.Retry`.
+
 ### 5. Shell-script opacity (content-hash approval gate)
 
 A plain `bash foo.sh` invocation hides all the commands inside the script.

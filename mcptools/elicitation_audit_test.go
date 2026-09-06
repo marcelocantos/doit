@@ -383,3 +383,73 @@ func TestElicitationAudit_ParentSeqLinking(t *testing.T) {
 		t.Error("elicitation should not link to the rm -rf / entry")
 	}
 }
+
+// TestElicitation_AllowOnce_RunsCommand covers the human-approved happy
+// path end to end: the client answers allow_once, the command runs, and
+// its stdout comes back. This is the only route by which an L1-escalated
+// command executes when L3 is off.
+func TestElicitation_AllowOnce_RunsCommand(t *testing.T) {
+	handler := &mockServerElicitationHandler{phase1Decision: "allow_once"}
+	client, auditPath := newElicitationClient(t, handler)
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	testFile := filepath.Join(dir, "hello.txt")
+	os.WriteFile(testFile, []byte("hello doit\n"), 0644)
+
+	result, err := client.CallTool(ctx, mcp.CallToolRequest{
+		Params: mcp.CallToolParams{
+			Name:      "doit_execute",
+			Arguments: map[string]any{"command": "cat " + testFile},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success after allow_once, got error: %+v", result.Content)
+	}
+	var resp map[string]any
+	tc, _ := result.Content[0].(mcp.TextContent)
+	if err := json.Unmarshal([]byte(tc.Text), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if code, _ := resp["exit_code"].(float64); code != 0 {
+		t.Errorf("exit_code: got %v, want 0", resp["exit_code"])
+	}
+	if stdout, _ := resp["stdout"].(string); stdout != "hello doit\n" {
+		t.Errorf("stdout: got %q", stdout)
+	}
+
+	entries := readAuditLog(t, auditPath)
+	cmdEntry := findEntry(entries, func(e audit.Entry) bool { return e.PolicyRuleID == engine.RuleIDRetryApproved })
+	if cmdEntry == nil {
+		t.Fatalf("expected an audit entry with rule_id %q, got %+v", engine.RuleIDRetryApproved, entries)
+	}
+}
+
+// TestElicitation_Deny_DoesNotRun: a human deny must leave no side effect.
+func TestElicitation_Deny_DoesNotRun(t *testing.T) {
+	handler := &mockServerElicitationHandler{phase1Decision: "deny"}
+	client, _ := newElicitationClient(t, handler)
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "MARKER")
+
+	result, err := client.CallTool(ctx, mcp.CallToolRequest{
+		Params: mcp.CallToolParams{
+			Name:      "doit_execute",
+			Arguments: map[string]any{"command": "touch " + marker},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !result.IsError {
+		t.Error("expected error result after user deny")
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("command ran despite user deny: marker file exists")
+	}
+}
