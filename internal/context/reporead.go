@@ -37,7 +37,9 @@ var AllowedFiles = []string{
 // Security notes:
 //   - filename must not contain path separators or ".." components; if it does,
 //     the function returns an error rather than silently resolving the path.
-//   - The resolved path is verified to remain within projectRoot.
+//   - The resolved path is verified to remain within projectRoot both
+//     lexically and after symlink resolution of file and root (🎯T45), so an
+//     allowlisted name that links outside the project is refused.
 func ReadRepoFile(projectRoot, filename string) ([]byte, error) {
 	// Reject filenames with suspicious path components.
 	if strings.ContainsRune(filename, os.PathSeparator) && filename != ".doit/config.yaml" {
@@ -64,7 +66,22 @@ func ReadRepoFile(projectRoot, filename string) ([]byte, error) {
 		return nil, fmt.Errorf("doit: repo read: %q: path escapes project root", filename)
 	}
 
-	data, err := os.ReadFile(clean)
+	// Resolve symlinks on both sides before the containment check: the
+	// kernel follows links, so a lexical prefix test alone can be pointed
+	// at any file on the system.
+	realRoot, err := filepath.EvalSymlinks(rootClean)
+	if err != nil {
+		return nil, fmt.Errorf("doit: repo read: project root: %w", err)
+	}
+	realPath, err := filepath.EvalSymlinks(clean)
+	if err != nil {
+		return nil, fmt.Errorf("doit: repo read: %w", err)
+	}
+	if !strings.HasPrefix(realPath, realRoot+string(os.PathSeparator)) {
+		return nil, fmt.Errorf("doit: repo read: %q: resolves outside project root", filename)
+	}
+
+	data, err := os.ReadFile(realPath)
 	if err != nil {
 		return nil, fmt.Errorf("doit: repo read: %w", err)
 	}

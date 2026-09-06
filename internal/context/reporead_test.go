@@ -144,3 +144,50 @@ func TestAllowedFiles_ContainsExpected(t *testing.T) {
 		}
 	}
 }
+
+// TestReadRepoFile_SymlinkEscape is the 🎯T45 regression: an allowlisted
+// name that is a symlink to a file outside the project must be refused,
+// whether it points at a sibling secret or a system file.
+func TestReadRepoFile_SymlinkEscape(t *testing.T) {
+	outside := t.TempDir()
+	writeFile(t, outside, "secret.txt", "TOP SECRET\n")
+
+	for name, target := range map[string]string{
+		"sibling secret": filepath.Join(outside, "secret.txt"),
+		"system file":    "/etc/passwd",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.Symlink(target, filepath.Join(dir, "go.mod")); err != nil {
+				t.Fatal(err)
+			}
+			data, err := doitctx.ReadRepoFile(dir, "go.mod")
+			if err == nil {
+				t.Fatalf("expected symlink escape to be rejected, got %d bytes", len(data))
+			}
+		})
+	}
+}
+
+// TestReadRepoFile_SymlinkInsideRootAllowed: a symlink whose target stays
+// inside the project is fine, and a symlinked project root resolves.
+func TestReadRepoFile_SymlinkInsideRootAllowed(t *testing.T) {
+	real := t.TempDir()
+	os.MkdirAll(filepath.Join(real, "build"), 0755)
+	writeFile(t, filepath.Join(real, "build"), "generated.mk", "all:\n")
+	if err := os.Symlink(filepath.Join(real, "build", "generated.mk"), filepath.Join(real, "Makefile")); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "project-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := doitctx.ReadRepoFile(link, "Makefile")
+	if err != nil {
+		t.Fatalf("in-root symlink under a symlinked root should read: %v", err)
+	}
+	if string(data) != "all:\n" {
+		t.Errorf("content: %q", data)
+	}
+}

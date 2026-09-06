@@ -54,7 +54,7 @@ Snapshot as of v0.9.0.
 | Tool | Parameters | Stability |
 |---|---|---|
 | `doit_check_config` | settings_path (optional) | Stable |
-| `doit_repo_read` | filename (required), project_root (optional) | Needs review |
+| `doit_repo_read` | filename (required), project_root (optional; must equal the server's project root — engine `ProjectRoot` or process cwd — any other directory is refused; symlinks are resolved and reads outside the root rejected) | Needs review |
 
 ### Engine API (`engine/` package)
 

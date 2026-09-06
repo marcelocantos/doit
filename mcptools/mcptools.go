@@ -234,7 +234,7 @@ func Register(srv *server.MCPServer, eng *engine.Engine) {
 				".gitignore, Makefile, go.mod, package.json, Cargo.toml, pyproject.toml, CLAUDE.md, .doit/config.yaml. "+
 				"Returns the file contents or an error if the file is not allowed or does not exist."),
 			mcp.WithString("filename", mcp.Required(), mcp.Description("File to read (must be in the allowlist)")),
-			mcp.WithString("project_root", mcp.Description("Project root directory (defaults to engine project root or cwd)")),
+			mcp.WithString("project_root", mcp.Description("Optional; must equal the server's project root (the directory doit was started for). Any other directory is refused.")),
 		),
 		handleRepoRead(eng),
 	)
@@ -1004,6 +1004,22 @@ func handleSelfAudit(eng *engine.Engine) server.ToolHandlerFunc {
 	}
 }
 
+// sameDir reports whether two paths name the same directory after
+// absolute-path cleaning and symlink resolution.
+func sameDir(a, b string) bool {
+	resolve := func(p string) string {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return filepath.Clean(p)
+		}
+		if real, err := filepath.EvalSymlinks(abs); err == nil {
+			return real
+		}
+		return abs
+	}
+	return resolve(a) == resolve(b)
+}
+
 func handleRepoRead(eng *engine.Engine) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
@@ -1012,15 +1028,23 @@ func handleRepoRead(eng *engine.Engine) server.ToolHandlerFunc {
 			return mcp.NewToolResultError("missing required parameter: filename"), nil
 		}
 
-		projectRoot := argString(args, "project_root")
+		// The root is pinned to what the server knows — the engine's
+		// project root, or the process cwd when none was configured. An
+		// agent-supplied project_root is accepted only when it names that
+		// same directory; otherwise the allowlist would be a filename
+		// filter over the whole filesystem (🎯T45).
+		projectRoot := eng.ProjectRoot()
 		if projectRoot == "" {
-			// Fall back to cwd. (The engine's ProjectRoot is not stored separately;
-			// callers should pass project_root explicitly when known.)
 			var err error
 			projectRoot, err = os.Getwd()
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("cannot determine project root: %v", err)), nil
 			}
+		}
+		if requested := argString(args, "project_root"); requested != "" && !sameDir(requested, projectRoot) {
+			return mcp.NewToolResultError(fmt.Sprintf(
+				"project_root %q is not the server's project root %q; doit_repo_read is confined to the project doit was started for",
+				requested, projectRoot)), nil
 		}
 
 		data, err := doitctx.ReadRepoFile(projectRoot, filename)

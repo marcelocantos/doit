@@ -395,3 +395,53 @@ func newTestEngineWithDangerous(t *testing.T, dangerous bool) *engine.Engine {
 	}
 	return eng
 }
+
+// TestRepoRead_PinnedToEngineRoot is the 🎯T45 regression for the MCP
+// surface: the agent cannot point doit_repo_read at a directory other
+// than the engine's project root.
+func TestRepoRead_PinnedToEngineRoot(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "go.mod"), []byte("module inside\n"), 0644)
+	elsewhere := t.TempDir()
+	os.WriteFile(filepath.Join(elsewhere, "go.mod"), []byte("module elsewhere\n"), 0644)
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	os.WriteFile(cfgPath, []byte(
+		"audit:\n  path: "+filepath.Join(dir, "audit.jsonl")+"\n"+
+			"policy:\n  level3_enabled: false\n",
+	), 0600)
+	eng, err := engine.New(engine.Options{ConfigPath: cfgPath, ProjectRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := handleRepoRead(eng)
+
+	// Foreign root: refused, and the foreign file's bytes never appear.
+	result, err := handler(context.Background(), newCallReq("doit_repo_read", map[string]any{
+		"filename": "go.mod", "project_root": elsewhere,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected error for foreign project_root, got %q", textContent(t, result))
+	}
+	if strings.Contains(textContent(t, result), "module elsewhere") {
+		t.Fatal("foreign file contents leaked")
+	}
+
+	// Omitted and matching roots both read the engine's file.
+	for _, args := range []map[string]any{
+		{"filename": "go.mod"},
+		{"filename": "go.mod", "project_root": root},
+	} {
+		result, err := handler(context.Background(), newCallReq("doit_repo_read", args))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.IsError || textContent(t, result) != "module inside\n" {
+			t.Errorf("args %v: got error=%v text=%q", args, result.IsError, textContent(t, result))
+		}
+	}
+}

@@ -1153,6 +1153,12 @@ func (e *Engine) SelfAudit() ([]policy.AuditFinding, error) {
 	return policy.AuditRules(l1Rules, entries, starlarkRules), nil
 }
 
+// ProjectRoot returns the absolute project root the engine was built
+// with, or "" when no project context was configured.
+func (e *Engine) ProjectRoot() string {
+	return e.projectRoot
+}
+
 // ProjectContext returns the discovered project context, or nil if no project
 // root was set or discovery has not been run.
 func (e *Engine) ProjectContext() *doitctx.ProjectContext {
