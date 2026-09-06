@@ -221,17 +221,24 @@ func isCatastrophicPath(path string) bool {
 	return false
 }
 
+// rmRecursiveFlags are the spellings of rm's recursive option: the POSIX
+// short forms and the GNU long form (accepted by the Linux release
+// artefacts even though macOS BSD rm does not know it).
+var rmRecursiveFlags = []string{"-r", "-R", "--recursive"}
+
 // checkRmCatastrophic blocks recursive removal of root, home, current
 // directory, blacklisted system paths, globs, and other-user home dirs.
-// Parses the raw command string — only matches when the command starts
-// with "rm" and has -r/-R.
+// Parses the raw command string — only matches when the command's first
+// token is rm (bare or by absolute path, e.g. /bin/rm) and carries a
+// recursive flag. Compound forms (`x && rm -rf /`) are deliberately not
+// parsed here (🎯T17); they escalate, and Execute fails closed (🎯T40).
 func checkRmCatastrophic(req *Request) *Result {
 	parts := strings.Fields(req.Command)
-	if len(parts) == 0 || parts[0] != "rm" {
+	if len(parts) == 0 || filepath.Base(parts[0]) != "rm" {
 		return nil
 	}
 	args := parts[1:]
-	if !HasAnyFlag(args, "-r", "-R") {
+	if !HasAnyFlag(args, rmRecursiveFlags...) {
 		return nil
 	}
 	deny := func(arg, reason string) *Result {

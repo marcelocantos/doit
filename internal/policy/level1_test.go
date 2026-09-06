@@ -62,6 +62,17 @@ func TestDenyRmCatastrophic(t *testing.T) {
 		{"rm -rf ./foo (relative path)", "rm -rf ./foo", false},
 		{"rm -f somefile.txt (no recursive flag)", "rm -f somefile.txt", false},
 		{"rm -f * (glob without recursive flag)", "rm -f *", false},
+		// GNU long options (ENT-007). macOS BSD rm lacks --recursive, but
+		// the Linux release artefacts accept it.
+		{"rm --recursive --force /", "rm --recursive --force /", true},
+		{"rm --recursive /home", "rm --recursive /home", true},
+		{"rm --force --recursive ~", "rm --force --recursive ~", true},
+		{"rm --recursive ./foo (relative path)", "rm --recursive ./foo", false},
+		// rm spelled by absolute path at argv0.
+		{"/bin/rm -rf /", "/bin/rm -rf /", true},
+		{"/usr/bin/rm --recursive /etc", "/usr/bin/rm --recursive /etc", true},
+		{"/bin/rm -rf ./build (relative path)", "/bin/rm -rf ./build", false},
+		{"/bin/rmdir -p / (not rm)", "/bin/rmdir -p /", false},
 	}
 
 	for _, tt := range tests {
