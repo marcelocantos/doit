@@ -87,9 +87,15 @@ removed from `~/.config/doit/config.yaml`.
 
 The `dangerous` tier is disabled by default and gates `rm`, `chmod`, and
 the destructive git subcommands (`push --force`, `reset --hard`, `clean
--fd`, `stash drop`). An agent cannot invoke these without the user
-explicitly enabling the `dangerous` tier in config, or the user approving
-via elicitation when the capability is already enabled.
+-fd`, `stash drop`). The check runs on the execution path, ahead of the
+policy chain: a command whose leading word resolves to a capability in a
+disabled tier is denied. Only editing the config lifts it — neither
+elicitation nor `--retry` can, because the tier switch is an operator
+decision rather than an agent-negotiable escalation.
+
+The gate reads the leading word only; doit passes the rest of the command
+to `sh -c` and leaves composition to the policy chain. So `chmod` is
+refused outright, while `echo x && chmod …` is a matter for L1/L2/L3.
 
 ### 4. Unrecognised commands (policy escalation)
 

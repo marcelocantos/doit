@@ -72,6 +72,14 @@ type Request struct {
 // would otherwise have escalated runs because the caller set Retry.
 const RuleIDRetryApproved = "retry-approved"
 
+// Audit rule_ids for the capability-registry gate that runs ahead of the
+// policy chain (ENT-002).
+const (
+	RuleIDTierDisabled       = "tier-disabled"
+	RuleIDCapabilityRule     = "capability-rule"
+	RuleIDCapabilityValidate = "capability-validate"
+)
+
 // Result is returned by Execute.
 type Result struct {
 	ExitCode       int
@@ -1586,17 +1594,53 @@ func (e *Engine) evaluatePolicy(ctx context.Context, args []string, req Request,
 		}, nil, nil, nil
 	}
 
-	// Extract the first word as the capability name for tier lookup.
-	// This is used only for audit log coarse-filtering (segments/tiers fields).
-	// The shell handles all composition (&&, |, ;, etc.) — the full command
-	// string is passed to policy layers as an opaque string.
+	// Extract the first word as the capability name for tier lookup. The
+	// shell handles all composition (&&, |, ;, etc.) — the full command
+	// string is passed to policy layers as an opaque string, so this
+	// lookup sees only the leading capability.
 	capName := args[0]
 	tier := cap.TierRead
+	var known cap.Capability
 	if c, lookupErr := e.reg.Lookup(capName); lookupErr == nil {
 		tier = cap.EffectiveTier(c, args[1:], req.Cwd)
+		known = c
 	}
 	segments = append(segments, capName)
 	tiers = append(tiers, tier.String())
+
+	// A disabled tier is an operator setting, not an agent-negotiable
+	// escalation: doit_check_config and the threat model both describe
+	// `tiers.dangerous: false` as gating destructive commands, so the
+	// registry check runs on the execution path and denies (ENT-002).
+	// Retry does not lift it — only editing the config does. An
+	// unrecognised leading word has no tier to check and falls through to
+	// the policy chain, which is fail-closed in its own right (🎯T40).
+	if known != nil {
+		if err := known.Validate(args[1:]); err != nil {
+			return &policy.Result{
+				Decision: policy.Deny,
+				Level:    0,
+				Reason:   fmt.Sprintf("capability %q rejected its arguments: %v", capName, err),
+				RuleID:   RuleIDCapabilityValidate,
+			}, segments, tiers, nil
+		}
+		if err := e.reg.CheckTier(tier); err != nil {
+			return &policy.Result{
+				Decision: policy.Deny,
+				Level:    0,
+				Reason:   fmt.Sprintf("capability %q is in the %s tier: %v", capName, tier, err),
+				RuleID:   RuleIDTierDisabled,
+			}, segments, tiers, nil
+		}
+		if err := e.reg.CheckRules(capName, args[1:], req.Retry); err != nil {
+			return &policy.Result{
+				Decision: policy.Deny,
+				Level:    0,
+				Reason:   fmt.Sprintf("capability rule: %v", err),
+				RuleID:   RuleIDCapabilityRule,
+			}, segments, tiers, nil
+		}
+	}
 
 	cmdStr := req.Command
 	if cmdStr == "" {
